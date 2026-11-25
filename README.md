@@ -1,0 +1,106 @@
+# Fluxa — SaaS para clínicas odontológicas e de estética
+
+CRM, agenda, criativos e textos com IA (Gemini), planejador de campanhas, contratação de automações de WhatsApp e cobrança recorrente (Pagar.me / Stone). Multi-clínica, com isolamento por clínica no banco (RLS).
+
+**Stack:** Next.js 15 (App Router) na Vercel · Supabase (Auth, Postgres, Storage) · Gemini (texto e imagem) · Pagar.me API v5 · n8n (integração com o comercial da Fluxa).
+
+---
+
+## 1. Como funciona
+
+| Módulo | Onde | O que faz |
+|---|---|---|
+| Conta e clínicas | `/cadastro`, `/onboarding`, `/convite/...` | Cadastro com e-mail e senha, 7 dias de teste, várias clínicas por usuário, convite de equipe (dono, administrador, equipe). |
+| Painel | `/app` | Leads do mês, valor em negociação, fechado no mês, taxa de faltas, agenda do dia, tarefas. |
+| CRM | `/app/crm`, `/app/contatos` | Funil arrastável, contatos com busca, linha do tempo, tarefas, exportação CSV, exclusão (LGPD), sugestão de mensagem com IA no estilo Chris Voss. |
+| Agenda | `/app/agenda` | Semana por profissional, bloqueio de conflito, status confirmado / realizado / faltou. |
+| Criativos com IA | `/app/criativos` | Briefing + fotos dos profissionais → Gemini escreve ganchos e texto do anúncio → 5 modelos de arte na identidade da clínica → editor → PNG. Fundo por IA opcional (sem pessoas). |
+| Textos com IA | `/app/textos` | Anúncio, legenda, WhatsApp, Google, roteiro de Reels. |
+| Campanhas | `/app/campanhas` | Plano de campanha na Meta (estrutura, público, orçamento, anúncios, cronograma, métricas). |
+| Automações | `/app/automacoes` | Contratação (R$ 797 + R$ 397/mês) e status; avisa o seu n8n. |
+| Assinatura | `/app/assinatura` | R$ 197/mês por cartão (recorrente) ou boleto, via Pagar.me. |
+| Admin | `/admin` | Só para você: MRR, todas as clínicas, ativar/bloquear/estender teste, status das automações. |
+| APIs | `/api/internal/*`, `/api/v1/*` | Comercial da Fluxa (n8n) e automações das clínicas (n8n). |
+
+Regras de cobrança: teste de 7 dias → sem assinatura, a clínica vira **somente leitura** (vê e exporta os dados, não grava). Pagamento falhou → 7 dias de carência → bloqueio. Cancelou → acesso até o fim do período pago. Tudo isso é aplicado no banco (RLS), não só na tela.
+
+Preços e limites ficam em `src/lib/plans.ts`.
+
+---
+
+## 2. Colocar no ar (uma vez)
+
+### 2.1 Supabase
+1. Crie o projeto em supabase.com (região São Paulo).
+2. **SQL Editor** → rode, nesta ordem: `supabase/migrations/0001_schema.sql`, `0002_security.sql`, `0003_storage.sql`.
+3. **Authentication → URL Configuration**: Site URL = `https://SEU-DOMINIO`; Redirect URLs: `https://SEU-DOMINIO/auth/confirm**`.
+4. **Authentication → Providers → Email**: deixe "Confirm email" ligado.
+5. **Authentication → Email**: aumente o prazo dos links (OTP expiry) para 86400 segundos. Os links de acesso criados pelo comercial (WhatsApp) usam esse prazo.
+6. **Authentication → SMTP**: configure um SMTP próprio (Resend, Brevo, SES). O SMTP padrão do Supabase tem limite baixo de envios por hora e não serve para produção.
+7. Depois de criar a sua conta no app, rode no SQL Editor para virar admin:
+   `update public.profiles set is_platform_admin = true where id = (select id from auth.users where email = 'SEU-EMAIL');`
+
+### 2.2 Vercel
+1. Suba esta pasta para um repositório GitHub e importe na Vercel.
+2. Cadastre as variáveis do `.env.example` (todas).
+3. O `vercel.json` já agenda o cron diário de cobrança. Gere um `CRON_SECRET` forte: a Vercel envia esse valor no cabeçalho.
+4. Aponte o domínio (ex.: `app.fluxa.com.br`) e preencha `NEXT_PUBLIC_APP_URL`.
+
+### 2.3 Pagar.me (grupo Stone)
+1. Na sua conta Stone/Pagar.me, ative o Pagar.me (pagamentos on-line) e pegue as chaves `sk_` e `pk_` (primeiro as de teste).
+2. Em **Configurações → Webhooks**, crie um webhook para `https://SEU-DOMINIO/api/webhooks/pagarme` com autenticação básica (usuário e senha = `PAGARME_WEBHOOK_USER` / `PAGARME_WEBHOOK_PASSWORD`). Eventos: `invoice.paid`, `invoice.payment_failed`, `invoice.created`, `charge.paid`, `charge.payment_failed`, `subscription.canceled`.
+3. No painel do Pagar.me, libere o domínio do app para tokenização de cartão (a chave pública roda no navegador).
+4. Teste no modo sandbox: assine com cartão de teste, confira que a clínica vira **Ativa** sozinha.
+
+### 2.4 Gemini
+Crie as chaves no Google AI Studio e coloque em `GEMINI_API_KEYS` separadas por vírgula. O sistema reveza entre elas e pula a que bater no limite. O plano gratuito tem limites por minuto e por dia; para muitas clínicas, ative a cobrança em pelo menos uma chave (o modelo Flash é barato). Modelos em `GEMINI_MODEL` e `GEMINI_IMAGE_MODEL`.
+
+### 2.5 n8n interno da Fluxa
+No `Config` do fluxo interno: `saas_url` = `https://SEU-DOMINIO`, `saas_token` = o mesmo `INTERNAL_API_TOKEN`. O webhook `A8 · Webhook SaaS` (path `fluxa-saas`) vai em `FLUXA_N8N_WEBHOOK_URL`. Detalhes no guia interno (seções 1.3 e 2.8).
+
+No sistema interno (HTML), em Configurações → Sistema Fluxa, preencha o mesmo endereço e token: a aba **Sistema Fluxa** passa a mostrar MRR, clínicas, testes e atrasos, e permite criar contas e ativar, bloquear ou estender testes.
+
+---
+
+## 3. APIs
+
+### 3.1 Comercial da Fluxa (cabeçalho `x-fluxa-token: INTERNAL_API_TOKEN`)
+- `POST /api/internal/provision` → cria o dono e a clínica e devolve `link` de acesso. Corpo: `nome_clinica, tipo (odonto|estetica), responsavel, email, telefone, cidade, uf, plano (sistema|sistema_automacoes), dias_teste, automacoes[], conv_id`. Repetir a chamada não duplica a clínica.
+- `GET /api/internal/clinics` → lista com status, plano, assinatura, automação e MRR (usado pelo sistema interno).
+- `POST /api/internal/action` → `{ clinic_id, action }` com `ativar_manual | bloquear | desbloquear | estender_teste | automacao_instalando | automacao_ativa | automacao_cancelada`.
+
+### 3.2 Automações da clínica (cabeçalho `Authorization: Bearer flx_...`, chave criada em Clínica e equipe)
+- `GET /api/v1/appointments?from=ISO&to=ISO&status=agendado,confirmado`
+- `PATCH /api/v1/appointments/{id}` `{ status, note }`
+- `GET /api/v1/contacts?phone=` · `?inactive_days=180` · `?birthday=MM-DD`
+- `POST /api/v1/contacts` `{ name, phone, source, source_detail, notes, deal_title }` → lead entra no funil.
+- `POST /api/v1/activities` `{ phone | contact_id, body, type }`
+
+Com isso, os fluxos da biblioteca (C1 confirmação, C3 reativação, C7 aniversário, B1 leads de anúncio) podem ler e gravar no CRM em vez da planilha.
+
+---
+
+## 4. Segurança e escala
+- Toda tabela tem `clinic_id` e RLS: um usuário só lê clínicas das quais é membro; escrita exige clínica liberada. Gatilhos impedem referência a dados de outra clínica e impedem o cliente de mudar status/plano.
+- Arquivos privados por clínica (`<clinic_id>/...`) com URLs assinadas de 1 hora.
+- Service role só no servidor, depois de checar permissão. Cartão tokenizado no navegador (a Fluxa nunca vê o número).
+- Webhook do Pagar.me com autenticação básica, idempotente (tabela `billing_events`) e confirmação do status direto na API.
+- Limites mensais de IA por clínica (`ai_usage`), índices nas consultas principais, paginação nas listas.
+- Testes de RLS: `supabase/tests/` (rodam num Postgres comum com o stub do Supabase).
+
+## 5. Custos de infraestrutura (estimativa para começar)
+Supabase Pro US$ 25/mês · Vercel Pro US$ 20/mês · Gemini: gratuito até o limite, depois por uso · Pagar.me: taxa por transação do seu contrato Stone · SMTP: gratuito até alguns milhares de e-mails/mês. Confira os preços atuais em cada serviço.
+
+## 6. O que foi testado e o que falta testar
+- **Testado aqui:** as migrações SQL num Postgres 16 com um stub do Supabase (isolamento entre clínicas, bloqueio de escrita sem assinatura, convite, campos protegidos, Storage, criação pelo servidor); `tsc` e `next build` sem erros; renderização dos 5 modelos de arte.
+- **Não testado:** login real no Supabase, chamadas reais ao Gemini e ao Pagar.me, envio de e-mail. Faça o roteiro da seção 2 no modo de teste (sandbox) antes de vender.
+- **Confirme na documentação do Pagar.me** os nomes dos eventos de webhook e o endpoint de tokenização de cartão da sua conta; o código lê os campos de forma tolerante e confirma o status direto na API, mas a integração não foi executada contra a conta real.
+
+## 7. Desenvolvimento
+```
+cp .env.example .env.local   # preencha
+npm install
+npm run dev
+npm run typecheck && npm run build
+```
+# fluxa
