@@ -2,7 +2,7 @@
 import { useActionState, useState } from 'react';
 import { FormMsg, Submit } from '@/components/ui';
 import { addActivity, createDeal, updateContact, updateDeal } from '../../crm-actions';
-import { SOURCES } from '../new-contact';
+import { SOURCES } from '@/lib/sources';
 import type { Contact } from '@/lib/types';
 import { waLink } from '@/lib/utils';
 

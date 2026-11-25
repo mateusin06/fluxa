@@ -2,11 +2,7 @@
 import { useActionState } from 'react';
 import { FormMsg, Submit } from '@/components/ui';
 import { createContact } from '../crm-actions';
-
-export const SOURCES = [
-  ['manual', 'Cadastro manual'], ['anuncio', 'Anúncio (Meta)'], ['instagram', 'Instagram'], ['google', 'Google'],
-  ['indicacao', 'Indicação'], ['whatsapp', 'WhatsApp'], ['site', 'Site'], ['api', 'Automação'],
-] as const;
+import { SOURCES } from '@/lib/sources';
 
 export function NewContact({ procedures }: { procedures: { id: string; name: string }[] }) {
   const [s, act] = useActionState(createContact, null);

@@ -2,7 +2,8 @@ import Link from 'next/link';
 import { getContext } from '@/lib/clinic';
 import { PageHeader, Empty, Badge } from '@/components/bits';
 import { fmtDate, fmtPhone } from '@/lib/utils';
-import { NewContact, SOURCES } from './new-contact';
+import { NewContact } from './new-contact';
+import { SOURCES } from '@/lib/sources';
 
 export const metadata = { title: 'Pacientes e leads' };
 const PER = 50;
