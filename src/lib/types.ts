@@ -10,6 +10,7 @@ export interface Clinic {
   responsible_name: string | null; responsible_reg: string | null; instagram: string | null; google_review_url: string | null;
   logo_path: string | null; brand: Brand; plan: 'sistema' | 'sistema_automacoes'; status: ClinicStatus;
   trial_ends_at: string; past_due_since: string | null; source: string; owner_id: string | null; created_at: string;
+  slot_procedure_id: string | null; slot_minutes: number; slot_capacity: number; slot_days_ahead: number;
 }
 
 export interface Stage { id: string; clinic_id: string; name: string; position: number; kind: 'open' | 'won' | 'lost'; color: string }

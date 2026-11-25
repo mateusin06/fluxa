@@ -9,20 +9,29 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   const { supabase, clinic } = await getContext();
   const sp = await searchParams;
   const now = new Date();
-  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 3)).toISOString();
-  const dayStart = new Date(new Date().setUTCHours(3, 0, 0, 0)).toISOString();
+  // limites do dia e do mês no horário de Brasília (UTC-3)
+  const br = new Date(now.getTime() - 3 * 3600000);
+  const monthStart = new Date(Date.UTC(br.getUTCFullYear(), br.getUTCMonth(), 1, 3)).toISOString();
+  const dayStart = new Date(Date.UTC(br.getUTCFullYear(), br.getUTCMonth(), br.getUTCDate(), 3)).toISOString();
+  const today = br.toISOString().slice(0, 10);
   const dayEnd = new Date(new Date(dayStart).getTime() + 86400000).toISOString();
   const d30 = new Date(Date.now() - 30 * 86400000).toISOString();
 
-  const [leads, stages, openDeals, wonMonth, today, past30, tasks] = await Promise.all([
+  const [leads, stages, openDeals, wonMonth, todayAppts, past30, tasks, paidMonth, openCharges] = await Promise.all([
     supabase.from('contacts').select('id', { count: 'exact', head: true }).eq('clinic_id', clinic.id).gte('created_at', monthStart),
     supabase.from('stages').select('id, kind').eq('clinic_id', clinic.id),
     supabase.from('deals').select('value, stage_id').eq('clinic_id', clinic.id).is('closed_at', null),
     supabase.from('deals').select('value, stage:stages!inner(kind)').eq('clinic_id', clinic.id).gte('closed_at', monthStart).eq('stage.kind', 'won'),
-    supabase.from('appointments').select('id, starts_at, status, contact:contacts(name), procedure:procedures(name)').eq('clinic_id', clinic.id).gte('starts_at', dayStart).lt('starts_at', dayEnd).order('starts_at'),
+    supabase.from('appointments').select('id, starts_at, status, procedure_text, contact:contacts(name), procedure:procedures(name)').eq('clinic_id', clinic.id).gte('starts_at', dayStart).lt('starts_at', dayEnd).order('starts_at'),
     supabase.from('appointments').select('status').eq('clinic_id', clinic.id).gte('starts_at', d30).lt('starts_at', now.toISOString()),
     supabase.from('activities').select('id, body, due_at, contact_id, contact:contacts(name)').eq('clinic_id', clinic.id).eq('type', 'tarefa').is('done_at', null).order('due_at').limit(8),
+    supabase.from('charges').select('amount').eq('clinic_id', clinic.id).eq('status', 'pago').gte('paid_at', monthStart).limit(10000),
+    supabase.from('charges').select('amount, due_date').eq('clinic_id', clinic.id).eq('status', 'aberto').limit(10000),
   ]);
+  const sumAmt = (l: { amount: number }[] | null) => (l || []).reduce((a, c) => a + Number(c.amount || 0), 0);
+  const faturado = sumAmt(paidMonth.data);
+  const aReceber = sumAmt(openCharges.data);
+  const vencido = sumAmt((openCharges.data || []).filter((c) => c.due_date < today));
 
   const openIds = new Set((stages.data || []).filter((s) => s.kind === 'open').map((s) => s.id));
   const pipeline = (openDeals.data || []).filter((d) => openIds.has(d.stage_id)).reduce((a, d) => a + Number(d.value || 0), 0);
@@ -47,20 +56,22 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           </ol>
         </div>
       )}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
+        <Stat label="Faturado no mês" value={money(faturado)} hint="Cobranças pagas neste mês" />
+        <Link href="/app/financeiro" className="block rounded-xl focus-visible:outline-2"><Stat label="A receber" value={money(aReceber)} hint={vencido > 0 ? `${money(vencido)} vencido` : 'Nada vencido'} /></Link>
         <Stat label="Leads no mês" value={leads.count ?? 0} />
         <Stat label="Em negociação" value={money(pipeline)} hint="Soma das oportunidades abertas" />
-        <Stat label="Fechado no mês" value={money(won)} />
+        <Stat label="Fechado no mês (CRM)" value={money(won)} hint="Oportunidades ganhas" />
         <Stat label="Faltas (30 dias)" value={faltas === null ? '—' : `${faltas}%`} hint="Faltou ÷ (realizado + faltou)" />
       </div>
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <section className="card" aria-labelledby="hoje">
           <h2 id="hoje" className="mb-3 font-semibold">Agenda de hoje</h2>
-          {today.data?.length ? (
+          {todayAppts.data?.length ? (
             <ul className="divide-y divide-slate-100">
-              {today.data.map((a) => (
+              {todayAppts.data.map((a) => (
                 <li key={a.id} className="flex items-center justify-between py-2 text-sm">
-                  <span><b>{fmtTime(a.starts_at)}</b> · {(a.contact as unknown as { name: string } | null)?.name || 'Horário livre'} <span className="text-slate-500">{(a.procedure as unknown as { name: string } | null)?.name}</span></span>
+                  <span><b>{fmtTime(a.starts_at)}</b> · {(a.contact as unknown as { name: string } | null)?.name || 'Horário livre'} <span className="text-slate-500">{(a.procedure as unknown as { name: string } | null)?.name || a.procedure_text}</span></span>
                   <Badge tone={a.status === 'confirmado' ? 'green' : a.status === 'faltou' ? 'red' : 'slate'}>{a.status}</Badge>
                 </li>
               ))}

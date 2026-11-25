@@ -1,6 +1,8 @@
 import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { normPhone } from '@/lib/utils';
+import { freeSlots, rowToSlot, slotId, slotRow, VIRTUAL_ROW0 } from '@/lib/slots';
+import { checkFit, loadSchedule } from '@/lib/schedule';
 
 /**
  * Adaptador "planilha" para as automações da biblioteca Fluxa (n8n).
@@ -63,6 +65,23 @@ async function all<T>(q: (from: number, to: number) => PromiseLike<{ data: T[] |
   return out;
 }
 
+/**
+ * Horários livres gerados do horário de atendimento (Configurações). Não existem na tabela:
+ * cada um ganha um id "livre-AAAAMMDDHHmm" e uma linha >= 900000000 que codifica o horário.
+ * Quando a automação grava nessa linha (lead escolheu o horário), a consulta é criada de verdade.
+ */
+async function virtualFree(db: Db, cid: string, list: Obj[]): Promise<Obj[]> {
+  const s = await loadSchedule(db, cid);
+  if (!s.hours.length) return [];
+  const now = Date.now(), to = now + s.daysAhead * 86400000;
+  const busy = list.filter((r) => !['cancelado', 'livre'].includes(String(r.status)))
+    .map((r) => ({ start: new Date(r.starts_at as string).getTime(), end: new Date(r.ends_at as string).getTime() }));
+  const manual = new Set(list.filter((r) => r.status === 'livre').map((r) => new Date(r.starts_at as string).getTime()));
+  return freeSlots({ hours: s.hours, busy, from: now, to, durMin: s.slotMin, stepMin: s.slotMin, capacity: s.capacity })
+    .filter((t) => !manual.has(t))
+    .map((t) => ({ id: slotId(t), data_hora: fmtDT(new Date(t).toISOString()), status: 'livre', procedimento: '', _row: slotRow(t) }));
+}
+
 // ---------------------------------------------------------------- leitura
 export async function readTab(db: Db, cid: string, tab: string): Promise<string[][]> {
   const H = HEADERS[tab];
@@ -73,13 +92,14 @@ export async function readTab(db: Db, cid: string, tab: string): Promise<string[
   if (tab === 'Agenda') {
     const from = new Date(now - 120 * 86400000).toISOString(), to = new Date(now + 120 * 86400000).toISOString();
     const list = await all<Obj>((a, b) => db.from('appointments')
-      .select('id, starts_at, status, meta, sheet_row, contact:contacts(name, phone), professional:professionals(name), procedure:procedures(name)')
+      .select('id, starts_at, ends_at, status, meta, sheet_row, procedure_text, contact:contacts(name, phone), professional:professionals(name), procedure:procedures(name)')
       .eq('clinic_id', cid).gte('starts_at', from).lt('starts_at', to).order('sheet_row').range(a, b));
-    return [H, ...list.map((r) => {
+    const rows = list.map((r) => {
       const c = (r.contact as Obj) || {}, m = meta(r);
       return row({ ...m, id: r.id, nome: c.name, telefone: c.phone, data_hora: fmtDT(r.starts_at as string), profissional: (r.professional as Obj)?.name,
-        procedimento: (r.procedure as Obj)?.name || m.procedimento, status: r.status, _row: r.sheet_row });
-    })];
+        procedimento: (r.procedure as Obj)?.name || r.procedure_text || m.procedimento, status: r.status, _row: r.sheet_row });
+    });
+    return [H, ...rows, ...(await virtualFree(db, cid, list)).map(row)];
   }
 
   if (tab === 'Pacientes' || tab === 'Leads' || tab === 'Optout') {
@@ -98,7 +118,7 @@ export async function readTab(db: Db, cid: string, tab: string): Promise<string[
       return [H, ...list.map((c) => { const m = meta(c); return row({ ...m, id: m.lead_id || c.id, nome: c.name, telefone: c.phone, origem: m.origem || c.source_detail, criado_em: m.criado_em || fmtDT(c.created_at as string), _row: c.sheet_row }); })];
     }
     // Pacientes: último atendimento, próximo agendamento e último procedimento vêm da agenda
-    const done = await all<Obj>((a, b) => db.from('appointments').select('contact_id, starts_at, procedure:procedures(name), meta')
+    const done = await all<Obj>((a, b) => db.from('appointments').select('contact_id, starts_at, procedure_text, procedure:procedures(name), meta')
       .eq('clinic_id', cid).eq('status', 'realizado').order('starts_at', { ascending: false }).range(a, b), 40000);
     const next = await all<Obj>((a, b) => db.from('appointments').select('contact_id, starts_at')
       .eq('clinic_id', cid).in('status', ['agendado', 'confirmado']).gt('starts_at', new Date().toISOString()).order('starts_at').range(a, b));
@@ -109,7 +129,7 @@ export async function readTab(db: Db, cid: string, tab: string): Promise<string[
       const m = meta(c), l = last.get(c.id as string);
       const lv = [l?.starts_at as string | undefined, c.last_visit_at as string | undefined].filter(Boolean).sort().pop();
       return row({ ...m, id: c.id, nome: c.name, telefone: c.phone, nascimento: c.birth_date || '', ultimo_atendimento: fmtD(lv), proximo_agendamento: fmtDT(nx.get(c.id as string)),
-        procedimento_ultimo: (l?.procedure as Obj)?.name || meta(l || {}).procedimento || '', _row: c.sheet_row });
+        procedimento_ultimo: (l?.procedure as Obj)?.name || l?.procedure_text || meta(l || {}).procedimento || '', _row: c.sheet_row });
     })];
   }
 
@@ -147,6 +167,39 @@ async function byName(db: Db, table: 'procedures' | 'professionals', cid: string
   return data?.[0]?.id || null;
 }
 
+async function procByName(db: Db, cid: string, name: string) {
+  if (!name) return null;
+  const { data } = await db.from('procedures').select('id, name, duration_min, price').eq('clinic_id', cid).ilike('name', name.trim()).limit(1);
+  return (data?.[0] as { id: string; name: string; duration_min: number; price: number | null } | undefined) || null;
+}
+
+/** Lead (ou a automação) escolheu um horário livre gerado: cria a consulta, ocupando a duração do procedimento. */
+async function bookVirtual(db: Db, cid: string, row: number, sets: Record<string, string>) {
+  const start = rowToSlot(row);
+  if (start === null) throw new Error(`Agenda: linha ${row} não encontrada`);
+  const status = APPT_STATUS.has(sets.status) ? sets.status : 'agendado';
+  if (status === 'livre' || status === 'cancelado') return; // nada a fazer num horário que ainda não existe
+  const phone = normPhone(sets.telefone);
+  if (!phone) throw new Error('Agenda: para marcar um horário livre é preciso o telefone do paciente');
+  const sc = await loadSchedule(db, cid);
+  const proc = (await procByName(db, cid, sets.procedimento)) || sc.slotProc;
+  const dur = proc?.duration_min || sc.slotMin;
+  const end = start + dur * 60000;
+  const fit = await checkFit(db, cid, sc, start, end);
+  if (fit.full || !fit.inside) throw new Error('Agenda: esse horário acabou de ser ocupado');
+  const c = await contactByPhone(db, cid, phone, sets.nome);
+  const m: Obj = {};
+  for (const [k, v] of Object.entries(sets)) if (!['id', '_row', 'nome', 'telefone', 'data_hora', 'status', 'procedimento', 'profissional'].includes(k) && v) m[k] = v;
+  m.slot_id = slotId(start);
+  const { error } = await db.from('appointments').insert({
+    clinic_id: cid, contact_id: c!.id, status, starts_at: new Date(start).toISOString(), ends_at: new Date(end).toISOString(),
+    procedure_id: proc?.id || null, procedure_text: proc ? null : (sets.procedimento || null), price: proc?.price ?? null,
+    professional_id: await byName(db, 'professionals', cid, sets.profissional), meta: m,
+  });
+  if (error) throw new Error('Agenda: ' + error.message);
+  await db.from('activities').insert({ clinic_id: cid, contact_id: c!.id, type: 'sistema', body: `Automação: consulta ${status} pelo WhatsApp (${dur} min).` });
+}
+
 async function timeline(db: Db, cid: string, phone: string | null, body: string, type: 'whatsapp' | 'sistema' = 'sistema') {
   const p = normPhone(phone);
   if (!p) return;
@@ -166,6 +219,7 @@ async function moveLeadDeal(db: Db, cid: string, contactId: string, status: stri
 }
 
 async function updateAppointment(db: Db, cid: string, row: number, sets: Record<string, string>) {
+  if (row >= VIRTUAL_ROW0) return bookVirtual(db, cid, row, sets);
   const { data: a } = await db.from('appointments').select('id, starts_at, ends_at, status, contact_id, meta').eq('clinic_id', cid).eq('sheet_row', row).maybeSingle();
   if (!a) throw new Error(`Agenda: linha ${row} não encontrada`);
   const patch: Obj = {}, m = { ...meta(a) };
@@ -180,7 +234,8 @@ async function updateAppointment(db: Db, cid: string, row: number, sets: Record<
     } else if (k === 'status') {
       if (APPT_STATUS.has(v)) patch.status = v;
     } else if (k === 'procedimento') {
-      const id = await byName(db, 'procedures', cid, v); if (id) patch.procedure_id = id; else m.procedimento = v;
+      const pr = await procByName(db, cid, v);
+      if (pr) { patch.procedure_id = pr.id; patch.procedure_text = null; } else if (v) { patch.procedure_text = v.slice(0, 120); }
     } else if (k === 'profissional') {
       const id = await byName(db, 'professionals', cid, v); if (id) patch.professional_id = id;
     } else m[k] = v;
@@ -290,11 +345,12 @@ export async function append(db: Db, cid: string, tab: string, rows: unknown[][]
       const c = await contactByPhone(db, cid, normPhone(o.telefone), o.nome);
       const m: Obj = {};
       ['lembrete1_em', 'lembrete2_em', 'alerta_em', 'confirmado_em', 'pos_enviado_em', 'avaliacao_pedida_em', 'nota'].forEach((k) => { if (o[k]) m[k] = o[k]; });
-      const procId = await byName(db, 'procedures', cid, o.procedimento);
-      if (!procId && o.procedimento) m.procedimento = o.procedimento;
+      const proc = await procByName(db, cid, o.procedimento);
+      const dur = proc?.duration_min || (await loadSchedule(db, cid)).slotMin || 60;
       const status = APPT_STATUS.has(o.status) ? o.status : (c ? 'agendado' : 'livre');
-      const { error } = await db.from('appointments').insert({ clinic_id: cid, contact_id: c?.id || null, starts_at: iso, ends_at: new Date(new Date(iso).getTime() + HR).toISOString(),
-        status, procedure_id: procId, professional_id: await byName(db, 'professionals', cid, o.profissional), meta: m });
+      const { error } = await db.from('appointments').insert({ clinic_id: cid, contact_id: c?.id || null, starts_at: iso, ends_at: new Date(new Date(iso).getTime() + dur * 60000).toISOString(),
+        status, procedure_id: proc?.id || null, procedure_text: proc ? null : (o.procedimento || null), price: proc?.price ?? null,
+        professional_id: await byName(db, 'professionals', cid, o.profissional), meta: m });
       if (error) throw new Error('Agenda: ' + error.message);
     } else if (tab === 'Pacientes') {
       const c = await contactByPhone(db, cid, normPhone(o.telefone), o.nome);

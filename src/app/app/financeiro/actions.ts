@@ -27,4 +27,6 @@ export async function setChargeStatus(fd: FormData) {
   await supabase.from('charges').update({ status, paid_at: status === 'pago' ? new Date().toISOString() : null })
     .eq('id', z.string().uuid().parse(fd.get('id'))).eq('clinic_id', clinic.id);
   revalidatePath('/app/financeiro');
+  revalidatePath('/app/agenda');
+  revalidatePath('/app');
 }

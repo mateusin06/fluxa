@@ -6,6 +6,7 @@ import { normPhone } from '@/lib/utils';
 import { newApiKey } from '@/lib/apikey';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { LIMITS } from '@/lib/plans';
+import { normalizeHours } from '@/lib/slots';
 
 type S = { error?: string; ok?: string; key?: string; link?: string } | null;
 const blank = (v: FormDataEntryValue | null) => { const s = String(v ?? '').trim(); return s || null; };
@@ -140,4 +141,43 @@ export async function revokeApiKey(fd: FormData) {
   const { clinic } = await admin();
   await createAdminClient().from('api_keys').update({ revoked_at: new Date().toISOString() }).eq('id', z.string().uuid().parse(fd.get('id'))).eq('clinic_id', clinic.id);
   revalidatePath('/app/configuracoes');
+}
+
+export async function saveHours(input: {
+  hours: { weekday: number; start: string; end: string }[];
+  slot_procedure_id: string | null; slot_minutes: number; slot_capacity: number; slot_days_ahead: number;
+}): Promise<S> {
+  try {
+    const { supabase, clinic, writable } = await admin();
+    if (!writable) return { error: 'A conta está em modo leitura.' };
+    if (!Array.isArray(input?.hours) || input.hours.length > 70) return { error: 'Intervalos inválidos.' };
+    const norm = normalizeHours(input.hours);
+    if (!norm.ok) return { error: norm.error };
+    const cfg = z.object({
+      slot_procedure_id: z.string().uuid().nullable(),
+      slot_minutes: z.coerce.number().int().min(5, 'Duração mínima de 5 min').max(600),
+      slot_capacity: z.coerce.number().int().min(1).max(20, 'No máximo 20 atendimentos ao mesmo tempo'),
+      slot_days_ahead: z.coerce.number().int().min(1).max(90, 'No máximo 90 dias à frente'),
+    }).safeParse(input);
+    if (!cfg.success) return { error: cfg.error.issues[0].message };
+    if (cfg.data.slot_procedure_id) {
+      const { data: p } = await supabase.from('procedures').select('id').eq('id', cfg.data.slot_procedure_id).eq('clinic_id', clinic.id).maybeSingle();
+      if (!p) return { error: 'Procedimento não encontrado.' };
+    }
+    const { error: e1 } = await supabase.from('clinics').update(cfg.data).eq('id', clinic.id);
+    if (e1) return { error: e1.message };
+    // troca os intervalos: grava os novos e só depois apaga os antigos (se algo falhar, os antigos continuam)
+    const { data: old } = await supabase.from('business_hours').select('id').eq('clinic_id', clinic.id);
+    if (norm.rows.length) {
+      const { error: e2 } = await supabase.from('business_hours').insert(norm.rows.map((r) => ({ ...r, clinic_id: clinic.id })));
+      if (e2) return { error: e2.message };
+    }
+    if (old?.length) {
+      const { error: e3 } = await supabase.from('business_hours').delete().in('id', old.map((o) => o.id));
+      if (e3) return { error: e3.message };
+    }
+    revalidatePath('/app/configuracoes');
+    revalidatePath('/app/agenda');
+    return { ok: norm.rows.length ? 'Horário salvo. Os horários livres já aparecem na Agenda e são oferecidos pelo WhatsApp.' : 'Horário apagado. Nenhum horário livre será gerado.' };
+  } catch (e) { return { error: (e as Error).message }; }
 }

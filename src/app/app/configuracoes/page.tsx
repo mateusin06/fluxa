@@ -3,6 +3,7 @@ import { PageHeader, Badge } from '@/components/bits';
 import { signMany } from '@/lib/signed';
 import { fmtDateTime } from '@/lib/utils';
 import { removeMember, revokeApiKey } from './actions';
+import { HoursForm } from './hours';
 import { ApiKeyForm, BrandForm, ClinicForm, InviteForm, ProcedureRow, ProfessionalForm, StageRow } from './forms';
 
 export const metadata = { title: 'Clínica e equipe' };
@@ -10,13 +11,14 @@ const ROLE = { owner: 'Dono', admin: 'Administrador', staff: 'Equipe' } as const
 
 export default async function Page() {
   const { supabase, clinic, isAdmin, writable, user } = await getContext();
-  const [pros, procs, stages, members, invites, keys] = await Promise.all([
+  const [pros, procs, stages, members, invites, keys, hours] = await Promise.all([
     supabase.from('professionals').select('*').eq('clinic_id', clinic.id).order('name'),
     supabase.from('procedures').select('*').eq('clinic_id', clinic.id).order('name'),
     supabase.from('stages').select('id, name, color, kind').eq('clinic_id', clinic.id).order('position'),
     supabase.from('memberships').select('user_id, role, profile:profiles(full_name)').eq('clinic_id', clinic.id),
     isAdmin ? supabase.from('invites').select('email, role, expires_at, accepted_at').eq('clinic_id', clinic.id).is('accepted_at', null).order('created_at', { ascending: false }) : Promise.resolve({ data: [] }),
     isAdmin ? supabase.from('api_keys').select('id, name, prefix, last_used_at, revoked_at, created_at').eq('clinic_id', clinic.id).order('created_at', { ascending: false }) : Promise.resolve({ data: [] }),
+    supabase.from('business_hours').select('weekday, start_time, end_time').eq('clinic_id', clinic.id).order('weekday').order('start_time'),
   ]);
   const urls = await signMany(supabase, [clinic.logo_path, ...(pros.data || []).map((p) => p.photo_path)]);
   const ro = !writable;
@@ -37,10 +39,14 @@ export default async function Page() {
 
         <section className="card">
           <h2 className="mb-2 font-semibold">Procedimentos</h2>
-          <p className="mb-2 text-sm text-slate-600">O retorno em dias é usado pela automação de retorno de procedimento.</p>
+          <p className="mb-2 text-sm text-slate-600">A duração preenche a Agenda sozinha e define quanto tempo a consulta ocupa. O retorno em dias é usado pela automação de retorno de procedimento.</p>
           {(procs.data || []).map((p) => <ProcedureRow key={p.id} p={{ ...p, price: p.price === null ? null : Number(p.price) }} />)}
           {!ro && <ProcedureRow />}
         </section>
+
+        <HoursForm hours={hours.data || []} disabled={!isAdmin || ro}
+          procs={(procs.data || []).filter((p) => p.active).map((p) => ({ id: p.id, name: p.name, duration_min: p.duration_min }))}
+          cfg={{ slot_procedure_id: clinic.slot_procedure_id ?? null, slot_minutes: clinic.slot_minutes ?? 30, slot_capacity: clinic.slot_capacity ?? 1, slot_days_ahead: clinic.slot_days_ahead ?? 21 }} />
 
         {isAdmin && (
           <section className="card">

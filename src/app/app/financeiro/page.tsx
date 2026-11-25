@@ -11,16 +11,15 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ s
   const { supabase, clinic, writable } = await getContext();
   const st = (await searchParams).st === 'pago' ? 'pago' : 'aberto';
   const today = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
-  const [{ data: list }, { data: contacts }, { data: open }] = await Promise.all([
+  const [{ data: list }, { data: open }] = await Promise.all([
     supabase.from('charges').select('id, description, amount, due_date, status, payment_link, paid_at, meta, contact_id, contact:contacts(name)').eq('clinic_id', clinic.id).eq('status', st).order('due_date').limit(500),
-    supabase.from('contacts').select('id, name').eq('clinic_id', clinic.id).order('updated_at', { ascending: false }).limit(500),
     supabase.from('charges').select('amount, due_date').eq('clinic_id', clinic.id).eq('status', 'aberto'),
   ]);
   const late = (open || []).filter((c) => c.due_date < today);
   const sum = (a: { amount: number }[]) => a.reduce((x, c) => x + Number(c.amount), 0);
   return (
     <>
-      <PageHeader title="Financeiro" desc="Contas a receber dos pacientes. Com a automação de cobrança ativa, os lembretes de pagamento saem sozinhos em D+1, D+5 e D+10.">
+      <PageHeader title="Financeiro" desc="Contas a receber dos pacientes. Consulta com valor marcada como realizada entra aqui sozinha. Com a automação de cobrança ativa, os lembretes de pagamento saem sozinhos em D+1, D+5 e D+10.">
         <Link href="/app/financeiro" className={`btn ${st === 'aberto' ? 'btn-pri' : 'btn-sec'}`}>Em aberto</Link>
         <Link href="/app/financeiro?st=pago" className={`btn ${st === 'pago' ? 'btn-pri' : 'btn-sec'}`}>Pagas</Link>
       </PageHeader>
@@ -28,7 +27,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ s
         <Stat label="Em aberto" value={money(sum(open || []))} />
         <Stat label="Vencido" value={money(sum(late))} hint={`${late.length} cobrança(s)`} />
       </div>
-      {writable && <div className="mb-6"><ChargeForm contacts={contacts || []} /></div>}
+      {writable && <div className="mb-6"><ChargeForm /></div>}
       {list?.length ? (
         <div className="card overflow-x-auto p-0">
           <table className="tbl">
@@ -37,7 +36,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ s
               {list.map((c) => (
                 <tr key={c.id}>
                   <td><Link className="underline" href={`/app/contatos/${c.contact_id}`}>{(c.contact as unknown as { name: string } | null)?.name}</Link></td>
-                  <td>{c.description}{c.payment_link && <> · <a className="underline" href={c.payment_link} target="_blank" rel="noreferrer">link</a></>}</td>
+                  <td>{c.description}{(c.meta as { forma?: string } | null)?.forma === 'balcao' && c.status === 'aberto' && <> <Badge tone="amber">balcão</Badge></>}{c.payment_link && <> · <a className="underline" href={c.payment_link} target="_blank" rel="noreferrer">link</a></>}</td>
                   <td>{money(c.amount)}</td>
                   <td>{fmtDate(c.due_date + 'T12:00:00Z')} {c.status === 'aberto' && c.due_date < today && <Badge tone="red">vencida</Badge>}</td>
                   <td className="text-xs text-slate-500">{(c.meta as { etapa_cobranca?: string })?.etapa_cobranca || '—'}</td>

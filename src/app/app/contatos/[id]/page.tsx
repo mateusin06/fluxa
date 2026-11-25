@@ -19,7 +19,7 @@ export default async function ContactPage({ params }: { params: Promise<{ id: st
     supabase.from('deals').select('id, title, value, stage_id, lost_reason').eq('contact_id', id).order('created_at'),
     supabase.from('stages').select('id, name').eq('clinic_id', clinic.id).order('position'),
     supabase.from('activities').select('id, type, body, due_at, done_at, created_at').eq('contact_id', id).order('created_at', { ascending: false }).limit(100),
-    supabase.from('appointments').select('id, starts_at, status, procedure:procedures(name)').eq('contact_id', id).order('starts_at', { ascending: false }).limit(20),
+    supabase.from('appointments').select('id, starts_at, status, procedure_text, procedure:procedures(name)').eq('contact_id', id).order('starts_at', { ascending: false }).limit(20),
     supabase.from('procedures').select('id, name').eq('clinic_id', clinic.id).eq('active', true).order('name'),
   ]);
   const contact = c as Contact;
@@ -62,7 +62,7 @@ export default async function ContactPage({ params }: { params: Promise<{ id: st
           <section className="card">
             <h2 className="mb-2 font-semibold">Consultas</h2>
             <ul className="space-y-1 text-sm">
-              {(appts.data || []).map((a) => <li key={a.id}>{fmtDateTime(a.starts_at)} · {(a.procedure as unknown as { name: string } | null)?.name || 'Consulta'} <Badge>{a.status}</Badge></li>)}
+              {(appts.data || []).map((a) => <li key={a.id}>{fmtDateTime(a.starts_at)} · {(a.procedure as unknown as { name: string } | null)?.name || a.procedure_text || 'Consulta'} <Badge>{a.status}</Badge></li>)}
               {!appts.data?.length && <li className="text-slate-500">Nenhuma consulta.</li>}
             </ul>
           </section>

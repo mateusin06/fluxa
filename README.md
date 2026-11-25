@@ -11,9 +11,9 @@ CRM, agenda, criativos e textos com IA (Gemini), planejador de campanhas, contra
 | Módulo | Onde | O que faz |
 |---|---|---|
 | Conta e clínicas | `/cadastro`, `/onboarding`, `/convite/...` | Cadastro com e-mail e senha, 7 dias de teste, várias clínicas por usuário, convite de equipe (dono, administrador, equipe). |
-| Painel | `/app` | Leads do mês, valor em negociação, fechado no mês, taxa de faltas, agenda do dia, tarefas. |
+| Painel | `/app` | Faturado no mês (cobranças pagas), a receber e vencido, leads do mês, valor em negociação, fechado no mês, taxa de faltas, agenda do dia, tarefas. |
 | CRM | `/app/crm`, `/app/contatos` | Funil arrastável, contatos com busca, linha do tempo, tarefas, exportação CSV, exclusão (LGPD), sugestão de mensagem com IA no estilo Chris Voss. |
-| Agenda | `/app/agenda` | Semana por profissional, bloqueio de conflito, status confirmado / realizado / faltou. |
+| Agenda | `/app/agenda`, `/app/configuracoes#horarios` | Horário de atendimento por dia da semana (vários intervalos por dia, para o almoço). O que não está ocupado vira horário livre na semana e é oferecido pelo WhatsApp. Procedimento escolhido da lista ou escrito à mão (com preço próprio); a duração vem do cadastro e pode ser mudada. Consulta ocupa a duração inteira e o próximo livre começa no fim dela. Capacidade de atendimentos simultâneos, aviso de horário ocupado (com opção de encaixe), status confirmado / realizado / faltou. Busca de paciente com lupa (nome ou telefone). Consulta com valor tem os botões **Realizado · Já pago** e **Realizado · Vai pagar no balcão**; a cobrança entra sozinha no Financeiro (paga ou em aberto) e o botão **Recebido** dá baixa. |
 | Criativos com IA | `/app/criativos` | Briefing + fotos dos profissionais → Gemini escreve ganchos e texto do anúncio → 5 modelos de arte na identidade da clínica → editor → PNG. Fundo por IA opcional (sem pessoas). |
 | Textos com IA | `/app/textos` | Anúncio, legenda, WhatsApp, Google, roteiro de Reels. |
 | Campanhas | `/app/campanhas` | Plano de campanha na Meta (estrutura, público, orçamento, anúncios, cronograma, métricas). |
@@ -32,7 +32,7 @@ Preços e limites ficam em `src/lib/plans.ts`.
 
 ### 2.1 Supabase
 1. Crie o projeto em supabase.com (região São Paulo).
-2. **SQL Editor** → rode, nesta ordem: `supabase/migrations/0001_schema.sql`, `0002_security.sql`, `0003_storage.sql`, `0004_automacoes.sql` (cada arquivo num Run separado).
+2. **SQL Editor** → rode, nesta ordem: `supabase/migrations/0001_schema.sql`, `0002_security.sql`, `0003_storage.sql`, `0004_automacoes.sql`, `0005_horarios.sql`, `0006_cobranca_consulta.sql` (cada arquivo num Run separado: o 0004 cria valores novos de status que o Postgres só aceita usar depois que o Run termina).
 3. **Authentication → URL Configuration**: Site URL = `https://SEU-DOMINIO`; Redirect URLs: `https://SEU-DOMINIO/auth/confirm**`.
 4. **Authentication → Providers → Email**: deixe "Confirm email" ligado.
 5. **Authentication → Email**: aumente o prazo dos links (OTP expiry) para 86400 segundos. Os links de acesso criados pelo comercial (WhatsApp) usam esse prazo.
@@ -76,12 +76,14 @@ No sistema interno (HTML), em Configurações → Sistema Fluxa, preencha o mesm
 - `POST /api/v1/contacts` `{ name, phone, source, source_detail, notes, deal_title }` → lead entra no funil.
 - `POST /api/v1/activities` `{ phone | contact_id, body, type }`
 
+- `GET /api/v1/horarios-livres?procedimento=Limpeza&dias=7&limite=50` → próximos horários livres, calculados do horário de atendimento menos o que já está ocupado. Sem `procedimento`, usa o procedimento (ou a duração fixa) configurado para o WhatsApp.
+
 ### 3.3 Modo planilha (biblioteca de automações)
 `/api/v1/planilha/values:batchGet`, `/values:batchUpdate` e `/values/{Aba}!A:Z:append`, com o cabeçalho `x-api-key: flx_...`. É a mesma interface do Google Sheets: os fluxos da biblioteca (B1, B3, C1 a C7) trocam só o endereço quando o `Config` tem `usa_sistema = SIM`.
 
 | Aba | Vem de | Gravações |
 |---|---|---|
-| Agenda | consultas (`appointments`), 120 dias para trás e para frente; horário livre = status `livre` | status, data, procedimento, profissional, paciente (por telefone) e campos de controle (`lembrete1_em`, `nota`...) em `meta` |
+| Agenda | consultas (`appointments`), 120 dias para trás e para frente; horário livre = status `livre`. Com horário de atendimento cadastrado, entram também os horários livres gerados (id `livre-AAAAMMDDHHmm`, linha a partir de 900000000), até `slot_days_ahead` dias à frente. Gravar telefone + status numa dessas linhas cria a consulta com a duração do procedimento; se o horário já foi tomado, responde 400 "esse horário acabou de ser ocupado" | status, data, procedimento, profissional, paciente (por telefone) e campos de controle (`lembrete1_em`, `nota`...) em `meta` |
 | Pacientes | contatos + último atendimento, próximo agendamento e último procedimento calculados da agenda | nome, telefone, nascimento e controles em `meta` |
 | Leads | contatos marcados como lead pelo B1 | novo lead cria contato + oportunidade em "Novo lead"; `agendado` move para "Avaliação agendada", `virou_paciente` para Fechado, `perdido` para Perdido |
 | Optout | contatos sem consentimento + números sem cadastro | PARAR tira o consentimento |
@@ -105,7 +107,7 @@ Cada linha traz a coluna `_row` (número estável do registro), e é ela que os 
 Supabase Pro US$ 25/mês · Vercel Pro US$ 20/mês · Gemini: gratuito até o limite, depois por uso · Pagar.me: taxa por transação do seu contrato Stone · SMTP: gratuito até alguns milhares de e-mails/mês. Confira os preços atuais em cada serviço.
 
 ## 6. O que foi testado e o que falta testar
-- **Testado aqui:** o modo planilha com os fluxos B1, B3, C1 a C7 rodando de verdade contra a API (PostgREST + Postgres locais): lead de anúncio entra no CRM, recebe horários livres, agenda e anda no funil; confirmação, PARAR, cobrança, lista de espera e pós-atendimento gravam no sistema. As migrações SQL num Postgres 16 com um stub do Supabase (isolamento entre clínicas, bloqueio de escrita sem assinatura, convite, campos protegidos, Storage, criação pelo servidor); `tsc` e `next build` sem erros; renderização dos 5 modelos de arte.
+- **Testado aqui:** cobrança da consulta (trigger no banco: realizado com valor cria cobrança vencendo hoje, sem duplicar; desfazer, faltou ou tirar o valor cancela a cobrança aberta; cobrança paga nunca é mexida; vale também quando a automação marca realizado pela API; C6 só cobra a partir do dia seguinte e para quando pago). Horário de atendimento e horários livres (cálculo com almoço, capacidade, duração por procedimento; lead do anúncio agenda pelo B1 num horário gerado, corrida de dois leads no mesmo horário recusada, C1 ignora horários livres; RLS da tabela de horários). O modo planilha com os fluxos B1, B3, C1 a C7 rodando de verdade contra a API (PostgREST + Postgres locais): lead de anúncio entra no CRM, recebe horários livres, agenda e anda no funil; confirmação, PARAR, cobrança, lista de espera e pós-atendimento gravam no sistema. As migrações SQL num Postgres 16 com um stub do Supabase (isolamento entre clínicas, bloqueio de escrita sem assinatura, convite, campos protegidos, Storage, criação pelo servidor); `tsc` e `next build` sem erros; renderização dos 5 modelos de arte.
 - **Não testado:** login real no Supabase, chamadas reais ao Gemini e ao Pagar.me, envio de e-mail. Faça o roteiro da seção 2 no modo de teste (sandbox) antes de vender.
 - **Confirme na documentação do Pagar.me** os nomes dos eventos de webhook e o endpoint de tokenização de cartão da sua conta; o código lê os campos de forma tolerante e confirma o status direto na API, mas a integração não foi executada contra a conta real.
 
