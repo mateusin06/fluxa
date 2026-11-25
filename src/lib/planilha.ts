@@ -1,8 +1,8 @@
 import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { normPhone } from '@/lib/utils';
-import { freeSlots, rowToSlot, slotId, slotRow, VIRTUAL_ROW0 } from '@/lib/slots';
-import { checkFit, loadSchedule } from '@/lib/schedule';
+import { freeSlotsPros, rowToSlot, slotId, slotRow, VIRTUAL_ROW0 } from '@/lib/slots';
+import { checkFit, freePro, loadSchedule } from '@/lib/schedule';
 
 /**
  * Adaptador "planilha" para as automações da biblioteca Fluxa (n8n).
@@ -72,14 +72,14 @@ async function all<T>(q: (from: number, to: number) => PromiseLike<{ data: T[] |
  */
 async function virtualFree(db: Db, cid: string, list: Obj[]): Promise<Obj[]> {
   const s = await loadSchedule(db, cid);
-  if (!s.hours.length) return [];
+  if (!s.hasHours) return [];
   const now = Date.now(), to = now + s.daysAhead * 86400000;
   const busy = list.filter((r) => !['cancelado', 'livre'].includes(String(r.status)))
-    .map((r) => ({ start: new Date(r.starts_at as string).getTime(), end: new Date(r.ends_at as string).getTime() }));
+    .map((r) => ({ start: new Date(r.starts_at as string).getTime(), end: new Date(r.ends_at as string).getTime(), pro: (r.professional_id as string | null) || null }));
   const manual = new Set(list.filter((r) => r.status === 'livre').map((r) => new Date(r.starts_at as string).getTime()));
-  return freeSlots({ hours: s.hours, busy, from: now, to, durMin: s.slotMin, stepMin: s.slotMin, capacity: s.capacity })
-    .filter((t) => !manual.has(t))
-    .map((t) => ({ id: slotId(t), data_hora: fmtDT(new Date(t).toISOString()), status: 'livre', procedimento: '', _row: slotRow(t) }));
+  return freeSlotsPros({ pros: s.pros, clinicHours: s.hours, busy, from: now, to, durMin: s.slotMin, stepMin: s.slotMin, capacity: s.capacity, procId: s.slotProc?.id })
+    .filter((x) => !manual.has(x.t))
+    .map(({ t }) => ({ id: slotId(t), data_hora: fmtDT(new Date(t).toISOString()), status: 'livre', procedimento: '', _row: slotRow(t) }));
 }
 
 // ---------------------------------------------------------------- leitura
@@ -92,7 +92,7 @@ export async function readTab(db: Db, cid: string, tab: string): Promise<string[
   if (tab === 'Agenda') {
     const from = new Date(now - 120 * 86400000).toISOString(), to = new Date(now + 120 * 86400000).toISOString();
     const list = await all<Obj>((a, b) => db.from('appointments')
-      .select('id, starts_at, ends_at, status, meta, sheet_row, procedure_text, contact:contacts(name, phone), professional:professionals(name), procedure:procedures(name)')
+      .select('id, starts_at, ends_at, status, meta, sheet_row, procedure_text, professional_id, contact:contacts(name, phone), professional:professionals(name), procedure:procedures(name)')
       .eq('clinic_id', cid).gte('starts_at', from).lt('starts_at', to).order('sheet_row').range(a, b));
     const rows = list.map((r) => {
       const c = (r.contact as Obj) || {}, m = meta(r);
@@ -185,8 +185,15 @@ async function bookVirtual(db: Db, cid: string, row: number, sets: Record<string
   const proc = (await procByName(db, cid, sets.procedimento)) || sc.slotProc;
   const dur = proc?.duration_min || sc.slotMin;
   const end = start + dur * 60000;
-  const fit = await checkFit(db, cid, sc, start, end);
-  if (fit.full || !fit.inside) throw new Error('Agenda: esse horário acabou de ser ocupado');
+  // profissional: o pedido pela automação, ou o primeiro livre que faz o procedimento
+  let proId = await byName(db, 'professionals', cid, sets.profissional);
+  if (!proId && sc.pros.length) {
+    const p = await freePro(db, cid, sc, start, end, proc?.id);
+    if (!p) throw new Error('Agenda: esse horário acabou de ser ocupado');
+    proId = p.id;
+  }
+  const fit = await checkFit(db, cid, sc, start, end, { proId });
+  if (fit.full || !fit.inside || fit.proBusy) throw new Error('Agenda: esse horário acabou de ser ocupado');
   const c = await contactByPhone(db, cid, phone, sets.nome);
   const m: Obj = {};
   for (const [k, v] of Object.entries(sets)) if (!['id', '_row', 'nome', 'telefone', 'data_hora', 'status', 'procedimento', 'profissional'].includes(k) && v) m[k] = v;
@@ -194,7 +201,7 @@ async function bookVirtual(db: Db, cid: string, row: number, sets: Record<string
   const { error } = await db.from('appointments').insert({
     clinic_id: cid, contact_id: c!.id, status, starts_at: new Date(start).toISOString(), ends_at: new Date(end).toISOString(),
     procedure_id: proc?.id || null, procedure_text: proc ? null : (sets.procedimento || null), price: proc?.price ?? null,
-    professional_id: await byName(db, 'professionals', cid, sets.profissional), meta: m,
+    professional_id: proId, meta: m,
   });
   if (error) throw new Error('Agenda: ' + error.message);
   await db.from('activities').insert({ clinic_id: cid, contact_id: c!.id, type: 'sistema', body: `Automação: consulta ${status} pelo WhatsApp (${dur} min).` });

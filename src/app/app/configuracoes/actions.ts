@@ -48,13 +48,15 @@ export async function saveBrand(input: { primary: string; secondary: string; acc
   } catch (e) { return { error: (e as Error).message }; }
 }
 
-export async function saveProfessional(input: { id?: string; name: string; specialty?: string; registration?: string; bio?: string; photo_path?: string | null; active?: boolean }): Promise<S> {
+export async function saveProfessional(input: { id?: string; name: string; specialty?: string; registration?: string; bio?: string; photo_path?: string | null; active?: boolean; attends?: boolean; commission_pct?: string | number | null }): Promise<S> {
   const { supabase, clinic } = await getContext();
   const p = z.object({
     id: z.string().uuid().optional(), name: z.string().trim().min(2).max(120), specialty: z.string().max(120).optional(),
     registration: z.string().max(60).optional(), bio: z.string().max(600).optional(), photo_path: filePath(clinic.id, 'profissionais').nullable().optional(),
-    active: z.boolean().optional(),
-  }).safeParse(input);
+    active: z.boolean().optional(), attends: z.boolean().optional(),
+    commission_pct: z.union([z.literal(''), z.null(), z.coerce.number().min(0, 'Comissão entre 0 e 100%').max(100, 'Comissão entre 0 e 100%')]).optional()
+      .transform((v) => (v === '' || v === undefined ? null : v)),
+  }).safeParse({ ...input, commission_pct: typeof input.commission_pct === 'string' ? input.commission_pct.replace(',', '.').trim() : input.commission_pct });
   if (!p.success) return { error: p.error.issues[0].message };
   const row = { ...p.data, clinic_id: clinic.id };
   const q = p.data.id ? supabase.from('professionals').update(row).eq('id', p.data.id).eq('clinic_id', clinic.id) : supabase.from('professionals').insert(row);
@@ -146,6 +148,7 @@ export async function revokeApiKey(fd: FormData) {
 export async function saveHours(input: {
   hours: { weekday: number; start: string; end: string }[];
   slot_procedure_id: string | null; slot_minutes: number; slot_capacity: number; slot_days_ahead: number;
+  professional_id?: string | null;
 }): Promise<S> {
   try {
     const { supabase, clinic, writable } = await admin();
@@ -153,6 +156,23 @@ export async function saveHours(input: {
     if (!Array.isArray(input?.hours) || input.hours.length > 70) return { error: 'Intervalos inválidos.' };
     const norm = normalizeHours(input.hours);
     if (!norm.ok) return { error: norm.error };
+    // horário próprio de um profissional: troca só as linhas dele
+    if (input.professional_id) {
+      const pid = z.string().uuid().parse(input.professional_id);
+      const { data: pr } = await supabase.from('professionals').select('id').eq('id', pid).eq('clinic_id', clinic.id).maybeSingle();
+      if (!pr) return { error: 'Profissional não encontrado.' };
+      const { data: oldP } = await supabase.from('business_hours').select('id').eq('clinic_id', clinic.id).eq('professional_id', pid);
+      if (norm.rows.length) {
+        const { error } = await supabase.from('business_hours').insert(norm.rows.map((r) => ({ ...r, clinic_id: clinic.id, professional_id: pid })));
+        if (error) return { error: error.message };
+      }
+      if (oldP?.length) {
+        const { error } = await supabase.from('business_hours').delete().in('id', oldP.map((o) => o.id));
+        if (error) return { error: error.message };
+      }
+      revalidatePath('/app/configuracoes'); revalidatePath('/app/agenda');
+      return { ok: norm.rows.length ? 'Horário do profissional salvo.' : 'Sem horário próprio: ele segue o horário da clínica.' };
+    }
     const cfg = z.object({
       slot_procedure_id: z.string().uuid().nullable(),
       slot_minutes: z.coerce.number().int().min(5, 'Duração mínima de 5 min').max(600),
@@ -167,7 +187,7 @@ export async function saveHours(input: {
     const { error: e1 } = await supabase.from('clinics').update(cfg.data).eq('id', clinic.id);
     if (e1) return { error: e1.message };
     // troca os intervalos: grava os novos e só depois apaga os antigos (se algo falhar, os antigos continuam)
-    const { data: old } = await supabase.from('business_hours').select('id').eq('clinic_id', clinic.id);
+    const { data: old } = await supabase.from('business_hours').select('id').eq('clinic_id', clinic.id).is('professional_id', null);
     if (norm.rows.length) {
       const { error: e2 } = await supabase.from('business_hours').insert(norm.rows.map((r) => ({ ...r, clinic_id: clinic.id })));
       if (e2) return { error: e2.message };
@@ -180,4 +200,52 @@ export async function saveHours(input: {
     revalidatePath('/app/agenda');
     return { ok: norm.rows.length ? 'Horário salvo. Os horários livres já aparecem na Agenda e são oferecidos pelo WhatsApp.' : 'Horário apagado. Nenhum horário livre será gerado.' };
   } catch (e) { return { error: (e as Error).message }; }
+}
+
+/** Procedimentos que o profissional faz (nenhum = todos) e a comissão de cada um (vazio = a padrão dele). */
+export async function saveProfessionalProcedures(input: { professional_id: string; items: { procedure_id: string; commission_pct: string }[] }): Promise<S> {
+  try {
+    const { supabase, clinic, writable } = await admin();
+    if (!writable) return { error: 'A conta está em modo leitura.' };
+    const pid = z.string().uuid().parse(input.professional_id);
+    const items = z.array(z.object({ procedure_id: z.string().uuid(), commission_pct: z.string().max(6) })).max(300).parse(input.items);
+    const rows = [];
+    for (const it of items) {
+      const t = it.commission_pct.replace(',', '.').trim();
+      const pct = t === '' ? null : Number(t);
+      if (pct !== null && !(pct >= 0 && pct <= 100)) return { error: 'Comissão entre 0 e 100%.' };
+      rows.push({ clinic_id: clinic.id, professional_id: pid, procedure_id: it.procedure_id, commission_pct: pct });
+    }
+    const { error: e1 } = await supabase.from('professional_procedures').delete().eq('clinic_id', clinic.id).eq('professional_id', pid);
+    if (e1) return { error: e1.message };
+    if (rows.length) {
+      const { error: e2 } = await supabase.from('professional_procedures').insert(rows);
+      if (e2) return { error: e2.message };
+    }
+    revalidatePath('/app/configuracoes'); revalidatePath('/app/agenda');
+    return { ok: rows.length ? `Salvo: faz ${rows.length} procedimento(s).` : 'Salvo: faz todos os procedimentos.' };
+  } catch (e) { return { error: (e as Error).message }; }
+}
+
+/** Endereço do fluxo de lista de espera (C2a) e texto do lembrete manual. */
+export async function saveAutomationSettings(_: S, fd: FormData): Promise<S> {
+  try {
+    const { supabase, clinic } = await admin();
+    const url = String(fd.get('waitlist_webhook_url') || '').trim();
+    if (url && !/^https:\/\/[^\s]+$/.test(url)) return { error: 'O endereço do webhook precisa começar com https://' };
+    const tpl = String(fd.get('reminder_template') || '').trim();
+    if (tpl.length > 600) return { error: 'Mensagem do lembrete: no máximo 600 caracteres.' };
+    const { error } = await supabase.from('clinics').update({ waitlist_webhook_url: url || null, reminder_template: tpl || null }).eq('id', clinic.id);
+    if (error) return { error: error.message };
+    revalidatePath('/app/configuracoes'); revalidatePath('/app/agenda');
+    return { ok: 'Salvo.' };
+  } catch (e) { return { error: (e as Error).message }; }
+}
+
+/** Acesso à ficha clínica (anamnese, evolução e fotos). O dono sempre tem. */
+export async function setClinicalAccess(fd: FormData) {
+  const { supabase, clinic } = await admin();
+  const uid = z.string().uuid().parse(fd.get('user_id'));
+  await supabase.from('memberships').update({ clinical_access: fd.get('value') === 'on' }).eq('clinic_id', clinic.id).eq('user_id', uid).neq('role', 'owner');
+  revalidatePath('/app/configuracoes');
 }

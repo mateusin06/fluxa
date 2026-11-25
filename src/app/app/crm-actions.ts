@@ -3,6 +3,7 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
 import { getContext } from '@/lib/clinic';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { localToIso, normPhone } from '@/lib/utils';
 
 type S = { error?: string; ok?: string } | null;
@@ -49,6 +50,7 @@ export async function updateContact(_: S, fd: FormData): Promise<S> {
   const { error } = await supabase.from('contacts').update({
     name: blank(fd.get('name')) || 'Sem nome', phone, email: blank(fd.get('email')), birth_date: blank(fd.get('birth_date')),
     source: blank(fd.get('source')) || 'manual', notes: blank(fd.get('notes')), tags, consent_whatsapp: fd.get('consent_whatsapp') === 'on',
+    ...(fd.has('document') ? { document: (blank(fd.get('document')) || '').replace(/[^\d.\-/]/g, '').slice(0, 20) || null } : {}),
   }).eq('id', id).eq('clinic_id', clinic.id);
   if (error) return { error: error.message };
   revalidatePath(`/app/contatos/${id}`);
@@ -59,7 +61,14 @@ export async function deleteContact(fd: FormData) {
   const { supabase, clinic, isAdmin } = await getContext();
   if (!isAdmin) return;
   const id = uuid.parse(fd.get('id'));
-  await supabase.from('contacts').delete().eq('id', id).eq('clinic_id', clinic.id);
+  const { data: gone } = await supabase.from('contacts').delete().eq('id', id).eq('clinic_id', clinic.id).select('id');
+  // LGPD: apaga também as fotos da ficha clínica no Storage
+  if (gone?.length) {
+    const adm = createAdminClient();
+    const dir = `${clinic.id}/pacientes/${id}`;
+    const { data: files } = await adm.storage.from('clinic-files').list(dir, { limit: 1000 });
+    if (files?.length) await adm.storage.from('clinic-files').remove(files.map((f) => `${dir}/${f.name}`));
+  }
   revalidatePath('/app/contatos'); revalidatePath('/app/crm');
   redirect('/app/contatos');
 }

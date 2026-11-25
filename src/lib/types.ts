@@ -11,13 +11,14 @@ export interface Clinic {
   logo_path: string | null; brand: Brand; plan: 'sistema' | 'sistema_automacoes'; status: ClinicStatus;
   trial_ends_at: string; past_due_since: string | null; source: string; owner_id: string | null; created_at: string;
   slot_procedure_id: string | null; slot_minutes: number; slot_capacity: number; slot_days_ahead: number;
+  waitlist_webhook_url: string | null; reminder_template: string | null;
 }
 
 export interface Stage { id: string; clinic_id: string; name: string; position: number; kind: 'open' | 'won' | 'lost'; color: string }
 export interface Contact {
   id: string; clinic_id: string; name: string; phone: string | null; email: string | null; birth_date: string | null;
   source: string; source_detail: string | null; tags: string[]; notes: string | null; consent_whatsapp: boolean;
-  last_visit_at: string | null; created_at: string; updated_at: string;
+  last_visit_at: string | null; created_at: string; updated_at: string; document?: string | null;
 }
 export interface Deal {
   id: string; clinic_id: string; contact_id: string; stage_id: string; procedure_id: string | null; title: string;
@@ -30,7 +31,7 @@ export interface Activity {
   body: string; due_at: string | null; done_at: string | null; user_id: string | null; created_at: string;
 }
 export interface Procedure { id: string; clinic_id: string; name: string; category: string | null; price: number | null; duration_min: number; return_days: number | null; active: boolean }
-export interface Professional { id: string; clinic_id: string; name: string; specialty: string | null; registration: string | null; bio: string | null; photo_path: string | null; active: boolean }
+export interface Professional { id: string; clinic_id: string; name: string; specialty: string | null; registration: string | null; bio: string | null; photo_path: string | null; active: boolean; attends: boolean; commission_pct: number | null }
 export interface Appointment {
   id: string; clinic_id: string; contact_id: string | null; professional_id: string | null; procedure_id: string | null;
   starts_at: string; ends_at: string; status: 'livre' | 'agendado' | 'confirmado' | 'remarcar' | 'realizado' | 'faltou' | 'cancelado'; notes: string | null;

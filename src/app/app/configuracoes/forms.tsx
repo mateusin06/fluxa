@@ -3,7 +3,8 @@ import { useActionState, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { FormMsg, Submit } from '@/components/ui';
 import type { Brand, Clinic } from '@/lib/types';
-import { createApiKey, inviteMember, saveBrand, saveClinic, saveProcedure, saveProfessional, saveStage } from './actions';
+import { createApiKey, inviteMember, saveAutomationSettings, saveBrand, saveClinic, saveProcedure, saveProfessional, saveProfessionalProcedures, saveStage } from './actions';
+import { DEFAULT_REMINDER, REMINDER_VARS } from '@/lib/reminder';
 
 async function upload(clinicId: string, folder: string, f: File) {
   if (f.size > 10 * 1024 * 1024) throw new Error('Máximo 10 MB');
@@ -69,7 +70,7 @@ export function BrandForm({ clinicId, brand, logoUrl, disabled }: { clinicId: st
   );
 }
 
-export interface ProRow { id: string; name: string; specialty: string | null; registration: string | null; bio: string | null; photo_path: string | null; photo: string | null; active: boolean }
+export interface ProRow { id: string; name: string; specialty: string | null; registration: string | null; bio: string | null; photo_path: string | null; photo: string | null; active: boolean; attends: boolean; commission_pct: number | null }
 
 export function ProfessionalForm({ clinicId, p, kind }: { clinicId: string; p?: ProRow; kind: 'odonto' | 'estetica' }) {
   const [msg, setMsg] = useState<{ ok?: string; error?: string } | null>(null);
@@ -83,7 +84,8 @@ export function ProfessionalForm({ clinicId, p, kind }: { clinicId: string; p?: 
       const photo_path = f && f.size ? await upload(clinicId, 'profissionais', f) : p?.photo_path ?? null;
       const r = await saveProfessional({
         id: p?.id, name: String(fd.get('name')), specialty: String(fd.get('specialty') || ''), registration: String(fd.get('registration') || ''),
-        bio: String(fd.get('bio') || ''), photo_path, active: fd.get('active') === 'on',
+        bio: String(fd.get('bio') || ''), photo_path, active: fd.get('active') === 'on', attends: fd.get('attends') === 'on',
+        commission_pct: String(fd.get('commission_pct') || ''),
       });
       setMsg(r);
       if (!p && r?.ok) e.currentTarget.reset();
@@ -100,6 +102,9 @@ export function ProfessionalForm({ clinicId, p, kind }: { clinicId: string; p?: 
       <div className="sm:col-span-2 sm:col-start-2"><label className="label" htmlFor={`pb-${id}`}>Mini bio (a IA usa nos criativos)</label><input id={`pb-${id}`} name="bio" defaultValue={p?.bio || ''} className="field" placeholder="Especialista em implantes, 12 anos de experiência" /></div>
       <div className="flex flex-wrap items-center gap-3 sm:col-span-2 sm:col-start-2">
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="active" defaultChecked={p ? p.active : true} /> Ativo</label>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="attends" defaultChecked={p ? p.attends : true} /> Atende na agenda</label>
+        <label className="flex items-center gap-2 text-sm" htmlFor={`pc-${id}`}>Comissão padrão
+          <input id={`pc-${id}`} name="commission_pct" inputMode="decimal" defaultValue={p?.commission_pct ?? ''} placeholder="0" className="field w-20 py-1" /> %</label>
         <button type="submit" disabled={busy} className="btn btn-sec">{busy ? 'Salvando...' : p ? 'Salvar' : 'Adicionar profissional'}</button>
         <FormMsg state={msg} />
       </div>
@@ -159,6 +164,62 @@ export function ApiKeyForm() {
       </div>
       <FormMsg state={s} />
       {s?.key && <p className="break-all rounded bg-slate-900 p-3 font-mono text-xs text-lima">{s.key}</p>}
+    </form>
+  );
+}
+
+/** Procedimentos que o profissional faz e a comissão de cada um. */
+export function ProfessionalProcedures({ pro, procs, current, disabled }: {
+  pro: { id: string; name: string; commission_pct: number | null };
+  procs: { id: string; name: string }[]; current: { procedure_id: string; commission_pct: number | null }[]; disabled: boolean;
+}) {
+  const [sel, setSel] = useState<Record<string, { on: boolean; pct: string }>>(() =>
+    Object.fromEntries(procs.map((p) => { const c = current.find((x) => x.procedure_id === p.id); return [p.id, { on: !!c, pct: c?.commission_pct === null || c?.commission_pct === undefined ? '' : String(c.commission_pct) }]; })));
+  const [msg, setMsg] = useState<{ ok?: string; error?: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const count = Object.values(sel).filter((x) => x.on).length;
+  async function save() {
+    setBusy(true); setMsg(null);
+    try {
+      setMsg(await saveProfessionalProcedures({ professional_id: pro.id, items: Object.entries(sel).filter(([, v]) => v.on).map(([procedure_id, v]) => ({ procedure_id, commission_pct: v.pct })) }));
+    } catch (e) { setMsg({ error: (e as Error).message }); } finally { setBusy(false); }
+  }
+  return (
+    <fieldset disabled={disabled} className="space-y-2">
+      <legend className="font-semibold">Procedimentos que {pro.name} faz</legend>
+      <p className="text-sm text-slate-600">Nenhum marcado = faz todos. Só os marcados são oferecidos com ele na agenda e no WhatsApp. A comissão vazia usa a padrão dele ({pro.commission_pct ?? 0}%).</p>
+      <div className="grid gap-1 sm:grid-cols-2">
+        {procs.map((p) => (
+          <div key={p.id} className="flex items-center gap-2 text-sm">
+            <input id={`pp-${pro.id}-${p.id}`} type="checkbox" checked={sel[p.id]?.on || false} onChange={(e) => setSel({ ...sel, [p.id]: { ...sel[p.id], on: e.target.checked } })} />
+            <label htmlFor={`pp-${pro.id}-${p.id}`} className="flex-1">{p.name}</label>
+            {sel[p.id]?.on && <><label className="sr-only" htmlFor={`ppc-${pro.id}-${p.id}`}>Comissão de {p.name} (%)</label><input id={`ppc-${pro.id}-${p.id}`} inputMode="decimal" value={sel[p.id].pct} onChange={(e) => setSel({ ...sel, [p.id]: { ...sel[p.id], pct: e.target.value } })} placeholder={`${pro.commission_pct ?? 0}`} className="field w-20 py-1" /><span aria-hidden="true">%</span></>}
+          </div>
+        ))}
+      </div>
+      {!disabled && <div className="flex items-center gap-3"><button type="button" onClick={save} disabled={busy} className="btn btn-sec">{busy ? 'Salvando...' : `Salvar procedimentos (${count || 'todos'})`}</button><FormMsg state={msg} /></div>}
+    </fieldset>
+  );
+}
+
+export function AutomationSettings({ url, template, disabled }: { url: string | null; template: string | null; disabled: boolean }) {
+  const [s, act] = useActionState(saveAutomationSettings, null);
+  return (
+    <form id="automacoes" action={act} className="card space-y-3">
+      <h2 className="font-semibold">Lembretes e lista de espera</h2>
+      <fieldset disabled={disabled} className="space-y-3">
+        <div>
+          <label className="label" htmlFor="au-tpl">Mensagem do lembrete de consulta (enviado com um toque pela Agenda)</label>
+          <textarea id="au-tpl" name="reminder_template" rows={3} maxLength={600} defaultValue={template || ''} placeholder={DEFAULT_REMINDER} className="field" />
+          <p className="mt-1 text-xs text-slate-500">Vazio usa o texto padrão. Pode usar: {REMINDER_VARS.join(' ')}</p>
+        </div>
+        <div>
+          <label className="label" htmlFor="au-wh">Webhook da lista de espera (automação C2a)</label>
+          <input id="au-wh" name="waitlist_webhook_url" type="url" defaultValue={url || ''} placeholder="https://seu-n8n.com/webhook/fluxa-c2-vaga" className="field" />
+          <p className="mt-1 text-xs text-slate-500">Com as automações: quando alguém cancela uma consulta futura aqui no sistema, a vaga é oferecida à lista de espera pelo WhatsApp. A Fluxa preenche na instalação.</p>
+        </div>
+      </fieldset>
+      {!disabled && <div className="flex items-center gap-3"><Submit>Salvar</Submit><FormMsg state={s} /></div>}
     </form>
   );
 }

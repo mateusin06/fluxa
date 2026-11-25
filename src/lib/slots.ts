@@ -9,6 +9,10 @@
 
 export interface Hour { weekday: number; start_time: string; end_time: string }
 export interface Busy { start: number; end: number }
+/** Consulta ocupando a agenda; `pro` = profissional (null = sem profissional definido). */
+export interface BusyPro extends Busy { pro?: string | null }
+/** Profissional que atende: horário próprio (ou o da clínica) e procedimentos que faz (null = todos). */
+export interface ProSched { id: string; name: string; hours: Hour[]; procs: string[] | null }
 
 const MIN = 60000;
 const DAY = 86400000;
@@ -131,3 +135,70 @@ export const VIRTUAL_ROW0 = 900000000;
 export const slotRow = (ms: number) => VIRTUAL_ROW0 + Math.round((ms - BASE) / MIN);
 export const rowToSlot = (row: number) => (row >= VIRTUAL_ROW0 ? BASE + (row - VIRTUAL_ROW0) * MIN : null);
 export const slotId = (ms: number) => 'livre-' + new Date(ms - TZ).toISOString().slice(0, 16).replace(/\D/g, '');
+
+// ---------------------------------------------------------------- por profissional
+/** O dia inteiro, todos os dias: usado para checar só a capacidade da clínica, sem horário. */
+export const ALLDAY: Hour[] = [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({ weekday, start_time: '00:00', end_time: '24:00' }));
+
+const doesProc = (p: ProSched, procId?: string | null) => !procId || !p.procs || p.procs.includes(procId);
+
+/**
+ * Horários livres considerando cada profissional: o horário está livre quando algum profissional
+ * que faz o procedimento está no horário dele e sem consulta, e a clínica ainda tem capacidade
+ * (cadeiras/salas) nesse momento. Sem profissionais que atendem, vale o horário da clínica.
+ */
+export function freeSlotsPros(o: {
+  pros: ProSched[]; clinicHours: Hour[]; busy: BusyPro[]; from: number; to: number; durMin: number; stepMin?: number;
+  capacity?: number; procId?: string | null; proId?: string | null; limit?: number;
+}): { t: number; pro: string | null }[] {
+  const cap = Math.max(1, o.capacity || 1), dur = Math.max(5, o.durMin) * MIN;
+  const pros = o.pros.filter((p) => (!o.proId || p.id === o.proId) && doesProc(p, o.procId));
+  if (!o.pros.length) {
+    return freeSlots({ hours: o.clinicHours, busy: o.busy, from: o.from, to: o.to, durMin: o.durMin, stepMin: o.stepMin, capacity: cap, limit: o.limit }).map((t) => ({ t, pro: null }));
+  }
+  const at = new Map<number, string>();
+  for (const p of pros) {
+    const mine = o.busy.filter((b) => b.pro === p.id);
+    for (const t of freeSlots({ hours: p.hours, busy: mine, from: o.from, to: o.to, durMin: o.durMin, stepMin: o.stepMin, capacity: 1 })) {
+      if (!at.has(t)) at.set(t, p.id);
+    }
+  }
+  const out: { t: number; pro: string | null }[] = [];
+  for (const t of [...at.keys()].sort((a, b) => a - b)) {
+    if (peak(o.busy, t, t + dur) >= cap) continue;
+    out.push({ t, pro: at.get(t)! });
+    if (o.limit && out.length >= o.limit) break;
+  }
+  return out;
+}
+
+/** Primeiro profissional livre (no horário dele, sem consulta, que faz o procedimento) para [start, end). */
+export function pickPro(pros: ProSched[], busy: BusyPro[], start: number, end: number, procId?: string | null): ProSched | null {
+  return pros.find((p) => doesProc(p, procId) && insideHours(p.hours, start, end) && !busy.some((b) => b.pro === p.id && b.start < end && b.end > start)) || null;
+}
+
+function unionIv(list: Busy[]): Busy[] {
+  const s = [...list].sort((a, b) => a.start - b.start), out: Busy[] = [];
+  for (const x of s) { const l = out[out.length - 1]; if (l && x.start <= l.end) l.end = Math.max(l.end, x.end); else out.push({ ...x }); }
+  return out;
+}
+function intersectIv(a: Busy[], b: Busy[]): Busy[] {
+  const out: Busy[] = [];
+  let i = 0, j = 0;
+  while (i < a.length && j < b.length) {
+    const s = Math.max(a[i].start, b[j].start), e = Math.min(a[i].end, b[j].end);
+    if (e > s) out.push({ start: s, end: e });
+    if (a[i].end < b[j].end) i++; else j++;
+  }
+  return out;
+}
+
+/** Trechos livres para mostrar na agenda, por profissional (ou de qualquer um, quando proId é vazio). */
+export function freeGapsPros(o: { pros: ProSched[]; clinicHours: Hour[]; busy: BusyPro[]; from: number; to: number; capacity?: number; proId?: string | null; minMin?: number }): Busy[] {
+  const cap = Math.max(1, o.capacity || 1), minLen = (o.minMin ?? 5) * MIN;
+  if (!o.pros.length) return freeGaps({ hours: o.clinicHours, busy: o.busy, from: o.from, to: o.to, capacity: cap, minMin: o.minMin });
+  const pros = o.pros.filter((p) => !o.proId || p.id === o.proId);
+  const perPro = unionIv(pros.flatMap((p) => freeGaps({ hours: p.hours, busy: o.busy.filter((b) => b.pro === p.id), from: o.from, to: o.to, capacity: 1, minMin: 0 })));
+  const room = freeGaps({ hours: ALLDAY, busy: o.busy, from: o.from, to: o.to, capacity: cap, minMin: 0 });
+  return intersectIv(perPro, room).filter((g) => g.end - g.start >= minLen);
+}

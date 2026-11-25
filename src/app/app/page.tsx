@@ -6,7 +6,7 @@ import { fmtDateTime, fmtTime, money } from '@/lib/utils';
 export const metadata = { title: 'Painel' };
 
 export default async function Dashboard({ searchParams }: { searchParams: Promise<{ bemvindo?: string }> }) {
-  const { supabase, clinic } = await getContext();
+  const { supabase, clinic, isAdmin } = await getContext();
   const sp = await searchParams;
   const now = new Date();
   // limites do dia e do mês no horário de Brasília (UTC-3)
@@ -17,7 +17,10 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
   const dayEnd = new Date(new Date(dayStart).getTime() + 86400000).toISOString();
   const d30 = new Date(Date.now() - 30 * 86400000).toISOString();
 
-  const [leads, stages, openDeals, wonMonth, todayAppts, past30, tasks, paidMonth, openCharges] = await Promise.all([
+  const tomorrow = new Date(new Date(dayStart).getTime() + 86400000).toISOString();
+  const after = new Date(new Date(dayStart).getTime() + 2 * 86400000).toISOString();
+  const sumAmt = (l: { amount: number }[] | null | undefined) => (l || []).reduce((a, c) => a + Number(c.amount || 0), 0);
+  const [leads, stages, openDeals, wonMonth, todayAppts, past30, tasks, paidMonth, openCharges, expMonth, remind, quotesOpen] = await Promise.all([
     supabase.from('contacts').select('id', { count: 'exact', head: true }).eq('clinic_id', clinic.id).gte('created_at', monthStart),
     supabase.from('stages').select('id, kind').eq('clinic_id', clinic.id),
     supabase.from('deals').select('value, stage_id').eq('clinic_id', clinic.id).is('closed_at', null),
@@ -27,8 +30,12 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
     supabase.from('activities').select('id, body, due_at, contact_id, contact:contacts(name)').eq('clinic_id', clinic.id).eq('type', 'tarefa').is('done_at', null).order('due_at').limit(8),
     supabase.from('charges').select('amount').eq('clinic_id', clinic.id).eq('status', 'pago').gte('paid_at', monthStart).limit(10000),
     supabase.from('charges').select('amount, due_date').eq('clinic_id', clinic.id).eq('status', 'aberto').limit(10000),
+    isAdmin ? supabase.from('expenses').select('amount').eq('clinic_id', clinic.id).eq('status', 'pago').gte('paid_at', monthStart).limit(10000) : Promise.resolve({ data: null }),
+    supabase.from('appointments').select('id, meta').eq('clinic_id', clinic.id).in('status', ['agendado', 'remarcar']).gte('starts_at', tomorrow).lt('starts_at', after),
+    supabase.from('quotes').select('id', { count: 'exact', head: true }).eq('clinic_id', clinic.id).eq('status', 'enviado'),
   ]);
-  const sumAmt = (l: { amount: number }[] | null) => (l || []).reduce((a, c) => a + Number(c.amount || 0), 0);
+  const despesas = sumAmt(expMonth.data);
+  const semLembrete = (remind.data || []).filter((a) => !(a.meta as { lembrete_manual_em?: string; lembrete1_em?: string } | null)?.lembrete_manual_em && !(a.meta as { lembrete1_em?: string } | null)?.lembrete1_em).length;
   const faturado = sumAmt(paidMonth.data);
   const aReceber = sumAmt(openCharges.data);
   const vencido = sumAmt((openCharges.data || []).filter((c) => c.due_date < today));
@@ -63,7 +70,12 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
         <Stat label="Em negociação" value={money(pipeline)} hint="Soma das oportunidades abertas" />
         <Stat label="Fechado no mês (CRM)" value={money(won)} hint="Oportunidades ganhas" />
         <Stat label="Faltas (30 dias)" value={faltas === null ? '—' : `${faltas}%`} hint="Faltou ÷ (realizado + faltou)" />
+        {isAdmin && <Link href="/app/financeiro?aba=resultado" className="block rounded-xl focus-visible:outline-2"><Stat label="Resultado do mês" value={money(faturado - despesas)} hint={`Recebido ${money(faturado)} − despesas pagas ${money(despesas)}`} /></Link>}
+        <Link href="/app/orcamentos?st=enviado" className="block rounded-xl focus-visible:outline-2"><Stat label="Orçamentos aguardando" value={quotesOpen.count ?? 0} hint="Enviados, sem resposta do paciente" /></Link>
       </div>
+      {semLembrete > 0 && (
+        <p className="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">{semLembrete} consulta(s) amanhã ainda sem lembrete. <Link className="underline" href="/app/agenda#lembretes">Enviar pelo WhatsApp</Link></p>
+      )}
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <section className="card" aria-labelledby="hoje">
           <h2 id="hoje" className="mb-3 font-semibold">Agenda de hoje</h2>

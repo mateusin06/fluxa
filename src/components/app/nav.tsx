@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
-import { BarChart3, CalendarDays, Wallet, CreditCard, KanbanSquare, Megaphone, Menu, PenTool, Settings, Shield, Sparkles, Users, Workflow, X } from 'lucide-react';
+import { BarChart3, CalendarDays, FileText, Wallet, CreditCard, KanbanSquare, Megaphone, Menu, PenTool, Settings, Shield, Sparkles, Users, Workflow, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Logo } from '@/components/logo';
 
@@ -11,6 +11,7 @@ const ITEMS = [
   { href: '/app/crm', label: 'Funil (CRM)', icon: KanbanSquare },
   { href: '/app/contatos', label: 'Pacientes e leads', icon: Users },
   { href: '/app/agenda', label: 'Agenda', icon: CalendarDays },
+  { href: '/app/orcamentos', label: 'Orçamentos', icon: FileText },
   { href: '/app/financeiro', label: 'Financeiro', icon: Wallet },
   { href: '/app/criativos', label: 'Criativos com IA', icon: PenTool },
   { href: '/app/textos', label: 'Textos com IA', icon: Sparkles },

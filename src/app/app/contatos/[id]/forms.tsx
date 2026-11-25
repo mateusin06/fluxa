@@ -16,6 +16,7 @@ export function EditContact({ c, readOnly }: { c: Contact; readOnly: boolean }) 
         <div><label className="label" htmlFor="e-name">Nome</label><input id="e-name" name="name" defaultValue={c.name} className="field" /></div>
         <div><label className="label" htmlFor="e-phone">WhatsApp</label><input id="e-phone" name="phone" defaultValue={c.phone || ''} className="field" /></div>
         <div><label className="label" htmlFor="e-email">E-mail</label><input id="e-email" name="email" type="email" defaultValue={c.email || ''} className="field" /></div>
+        <div><label className="label" htmlFor="e-doc">CPF (sai no recibo, para reembolso)</label><input id="e-doc" name="document" inputMode="numeric" maxLength={20} defaultValue={c.document || ''} className="field" /></div>
         <div><label className="label" htmlFor="e-birth">Nascimento</label><input id="e-birth" name="birth_date" type="date" defaultValue={c.birth_date || ''} className="field" /></div>
         <div><label className="label" htmlFor="e-src">Origem</label><select id="e-src" name="source" defaultValue={c.source} className="field">{SOURCES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
         <div><label className="label" htmlFor="e-tags">Etiquetas (vírgula)</label><input id="e-tags" name="tags" defaultValue={(c.tags || []).join(', ')} className="field" /></div>

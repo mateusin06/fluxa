@@ -65,4 +65,5 @@ create policy business_hours_delete on public.business_hours for delete to authe
   using (public.is_clinic_admin(clinic_id) and public.clinic_writable(clinic_id));
 
 -- Índice para achar rápido o que ocupa a agenda num período
-create index if not exists appointments_busy_idx on public.appointments(clinic_id, starts_at, ends_at) where status not in ('cancelado', 'livre');
+drop index if exists public.appointments_busy_idx;
+create index if not exists appointments_busy_idx on public.appointments(clinic_id, starts_at, ends_at);
