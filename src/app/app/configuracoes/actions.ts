@@ -7,6 +7,7 @@ import { newApiKey } from '@/lib/apikey';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { LIMITS } from '@/lib/plans';
 import { normalizeHours } from '@/lib/slots';
+import { parseInsurances } from '@/lib/insurance';
 
 type S = { error?: string; ok?: string; key?: string; link?: string } | null;
 const blank = (v: FormDataEntryValue | null) => { const s = String(v ?? '').trim(); return s || null; };
@@ -239,6 +240,20 @@ export async function saveAutomationSettings(_: S, fd: FormData): Promise<S> {
     if (error) return { error: error.message };
     revalidatePath('/app/configuracoes'); revalidatePath('/app/agenda');
     return { ok: 'Salvo.' };
+  } catch (e) { return { error: (e as Error).message }; }
+}
+
+/** Convênios que a clínica atende. */
+export async function saveInsurances(_: S, fd: FormData): Promise<S> {
+  try {
+    const { supabase, clinic } = await admin();
+    const accepts = fd.get('accepts_insurance') === 'on';
+    const list = parseInsurances(String(fd.get('insurances') || ''));
+    if (accepts && !list.length) return { error: 'Informe pelo menos um convênio (um por linha).' };
+    const { error } = await supabase.from('clinics').update({ accepts_insurance: accepts, insurances: list }).eq('id', clinic.id);
+    if (error) return { error: error.message };
+    revalidatePath('/app', 'layout');
+    return { ok: accepts ? `Salvo: ${list.length} convênio(s).` : 'Salvo: a clínica atende só particular.' };
   } catch (e) { return { error: (e as Error).message }; }
 }
 

@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { Suspense } from 'react';
 import { getContext } from '@/lib/clinic';
 import { PageHeader, Badge } from '@/components/bits';
 import { PayForm } from '@/components/pay-form';
@@ -8,9 +9,11 @@ import { renderReminder } from '@/lib/reminder';
 import { gapsFor, loadSchedule } from '@/lib/schedule';
 import { openWindows, toMin } from '@/lib/slots';
 import { NewAppointment, type PlanItem } from './new-appt';
-import { markChargePaid, setAppointmentStatus, setWaitlistStatus } from './actions';
+import { markChargePaid, setAppointmentPayer, setAppointmentStatus, setWaitlistStatus } from './actions';
 import { AddWaitlist } from './waitlist';
 import { ReminderButton } from './reminder';
+import { DayOnMobile } from './day-mobile';
+import { MobileCollapse } from '@/components/mobile-collapse';
 
 export const metadata = { title: 'Agenda' };
 const DOW = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
@@ -39,7 +42,7 @@ export default async function AgendaPage({ searchParams }: { searchParams: Promi
   const start = new Date(monday + 'T00:00:00-03:00');
   const end = new Date(start.getTime() + 7 * DAY);
   const shift = (d: number) => new Date(start.getTime() + d * DAY + 12 * HR).toISOString().slice(0, 10);
-  const modo = sp.modo === 'lista' ? 'lista' : 'grade';
+  const modo = sp.modo === 'lista' ? 'lista' : sp.modo === 'dia' ? 'dia' : 'grade';
   const prof = sp.prof && UUID.test(sp.prof) ? sp.prof : '';
   const qs = (o: Partial<Sp>) => {
     const m = { semana: monday, modo, prof, ...o };
@@ -48,7 +51,7 @@ export default async function AgendaPage({ searchParams }: { searchParams: Promi
 
   const tomorrow0 = new Date(new Date(Date.now() - 3 * HR).toISOString().slice(0, 10) + 'T00:00:00-03:00').getTime() + DAY;
   const [appts, preset, pros, procs, wait, sched, remind, planItem] = await Promise.all([
-    supabase.from('appointments').select('id, starts_at, ends_at, status, contact_id, professional_id, procedure_text, price, quote_item_id, contact:contacts(name), professional:professionals(name), procedure:procedures(name)')
+    supabase.from('appointments').select('id, starts_at, ends_at, status, contact_id, professional_id, procedure_text, price, quote_item_id, payer, insurance, insurance_auth, contact:contacts(name, insurance), professional:professionals(name), procedure:procedures(name)')
       .eq('clinic_id', clinic.id).gte('starts_at', start.toISOString()).lt('starts_at', end.toISOString()).order('starts_at'),
     sp.contato && UUID.test(sp.contato) ? supabase.from('contacts').select('id, name').eq('clinic_id', clinic.id).eq('id', sp.contato).maybeSingle() : Promise.resolve({ data: null }),
     supabase.from('professionals').select('id, name').eq('clinic_id', clinic.id).eq('active', true).eq('attends', true).order('name'),
@@ -71,7 +74,7 @@ export default async function AgendaPage({ searchParams }: { searchParams: Promi
   const all = appts.data || [];
   const shown = prof ? all.filter((a) => a.professional_id === prof) : all;
   const ids = shown.filter((a) => a.status === 'realizado').map((a) => a.id);
-  const { data: chs } = ids.length ? await supabase.from('charges').select('id, appointment_id, status, amount, meta, payment_method, installments').in('appointment_id', ids).neq('status', 'cancelado') : { data: [] };
+  const { data: chs } = ids.length ? await supabase.from('charges').select('id, appointment_id, status, amount, meta, payment_method, installments, payer, insurance, due_date').in('appointment_id', ids).neq('status', 'cancelado') : { data: [] };
   const chargeOf = new Map((chs || []).map((c) => [c.appointment_id as string, c]));
   const busy = all.filter((a) => !['cancelado', 'livre'].includes(a.status)).map((a) => ({ start: new Date(a.starts_at).getTime(), end: new Date(a.ends_at).getTime(), pro: a.professional_id }));
   const hm = (ms: number) => new Date(ms - 3 * HR).toISOString().slice(11, 16);
@@ -104,7 +107,12 @@ export default async function AgendaPage({ searchParams }: { searchParams: Promi
   const PX = 1.1; // px por minuto
   const top = (ms: number, d0: number) => ((ms - d0) / 60000 - h0) * PX;
   const dia = sp.dia && /^\d{4}-\d{2}-\d{2}$/.test(sp.dia) ? sp.dia : null;
-  const detail = dia ? days.find((d) => d.iso === dia) : null;
+  const hojeIso = new Date(Date.now() - 3 * HR).toISOString().slice(0, 10);
+  const diaSel = dia && days.some((d) => d.iso === dia) ? dia : days.some((d) => d.iso === hojeIso) ? hojeIso : days[0].iso;
+  const isoShift = (iso: string, n: number) => new Date(new Date(iso + 'T12:00:00-03:00').getTime() + n * DAY).toISOString().slice(0, 10);
+  const diaPrev = isoShift(diaSel, -1), diaNext = isoShift(diaSel, 1);
+  const gridDays = modo === 'dia' ? days.filter((d) => d.iso === diaSel) : days;
+  const detail = modo === 'dia' ? days.find((d) => d.iso === diaSel) || null : dia ? days.find((d) => d.iso === dia) : null;
 
   const reminders = (remind.data || []).filter((a) => (!prof || a.professional_id === prof) && (a.contact as unknown as { phone: string | null } | null)?.phone);
 
@@ -114,10 +122,11 @@ export default async function AgendaPage({ searchParams }: { searchParams: Promi
       <p className="text-slate-600">{[nm(a.procedure) || a.procedure_text, nm(a.professional), Number(a.price) > 0 ? money(Number(a.price)) : '', a.quote_item_id ? 'sessão do plano' : ''].filter(Boolean).join(' · ')}</p>
       <div className="mt-1 flex flex-wrap items-center gap-1">
         <Badge tone={TONE[a.status as keyof typeof TONE]}>{a.status}</Badge>
+        {a.payer === 'convenio' && <Badge tone="violet">{a.insurance}{a.insurance_auth ? ` · guia ${a.insurance_auth}` : ''}</Badge>}
         {writable && a.contact_id && a.status !== 'realizado' && (
           <>
             {(['confirmado', 'faltou', 'cancelado'] as const).filter((s) => s !== a.status).map((s) => <StatusBtn key={s} id={a.id} status={s}>{s}</StatusBtn>)}
-            {Number(a.price) > 0 ? (
+            {a.payer === 'convenio' ? <StatusBtn id={a.id} status="realizado" tone="green">Realizado (convênio)</StatusBtn> : Number(a.price) > 0 ? (
               <>
                 <PayForm action={setAppointmentStatus} hidden={{ id: a.id, status: 'realizado', pagamento: 'pago' }} label="Realizado · Já pago" />
                 <StatusBtn id={a.id} status="realizado" pay="balcao" tone="amber">Realizado · Vai pagar no balcão</StatusBtn>
@@ -130,6 +139,9 @@ export default async function AgendaPage({ searchParams }: { searchParams: Promi
         const c = chargeOf.get(a.id);
         if (!c) return a.quote_item_id ? <p className="mt-1 text-slate-500">Sessão do plano: já cobrada no orçamento.</p> : Number(a.price) > 0 ? null : <p className="mt-1 text-slate-500">Sem valor: não gerou cobrança.</p>;
         const balcao = (c.meta as { forma?: string } | null)?.forma === 'balcao';
+        if (c.payer === 'convenio') return c.status === 'pago'
+          ? <p className="mt-1 font-medium text-emerald-700">Recebido do convênio · {money(Number(c.amount))}</p>
+          : <p className="mt-1 font-medium text-violet-700">A receber do convênio {c.insurance} · {money(Number(c.amount))} · vence {fmtDate(c.due_date + 'T12:00:00Z')}</p>;
         return c.status === 'pago'
           ? <p className="mt-1 font-medium text-emerald-700">Pago · {money(Number(c.amount))}{c.payment_method ? ` · ${methodLabel(c.payment_method)}${c.payment_method === 'credito' && c.installments > 1 ? ` ${c.installments}x` : ''}` : ''}</p>
           : (
@@ -140,6 +152,14 @@ export default async function AgendaPage({ searchParams }: { searchParams: Promi
           );
       })()}
       {writable && a.status === 'realizado' && <div className="mt-1"><StatusBtn id={a.id} status="confirmado" subtle>Desfazer realizado</StatusBtn></div>}
+      {writable && clinic.accepts_insurance && a.contact_id && !a.quote_item_id && !['cancelado', 'faltou'].includes(a.status) && (a.payer === 'convenio' || !!(a.contact as unknown as { insurance: string | null } | null)?.insurance) && (
+        <form action={setAppointmentPayer} className="mt-1 flex flex-wrap items-center gap-1">
+          <input type="hidden" name="id" value={a.id} />
+          <input type="hidden" name="payer" value={a.payer === 'convenio' ? 'particular' : 'convenio'} />
+          {a.payer !== 'convenio' && <input name="insurance_auth" aria-label="Nº da guia" placeholder="nº da guia" maxLength={40} className="w-24 rounded border border-slate-200 px-1 py-0.5" />}
+          <button type="submit" className="text-slate-500 underline hover:text-slate-800">{a.payer === 'convenio' ? 'Mudar para particular' : 'Mudar para convênio'}</button>
+        </form>
+      )}
     </li>
   );
 
@@ -151,7 +171,8 @@ export default async function AgendaPage({ searchParams }: { searchParams: Promi
         <Link className="btn btn-sec" href={qs({ semana: shift(7), dia: '' })}>Próxima ›</Link>
       </PageHeader>
 
-      {writable && <div className="mb-6"><NewAppointment key={(presetStart || 'novo') + (plan?.id || '')} pros={pros.data || []} procs={procList} preset={preset.data} presetStart={presetStart} presetPro={prof || undefined} defaultMin={sched.slotMin} plan={plan} /></div>}
+      {!sp.modo && <Suspense fallback={null}><DayOnMobile /></Suspense>}
+      {writable && <div className="mb-6"><MobileCollapse title={plan ? 'Agendar sessão do plano' : 'Nova consulta'} forceOpen={!!(presetStart || plan || preset.data)}><NewAppointment key={(presetStart || 'novo') + (plan?.id || '')} pros={pros.data || []} procs={procList} preset={preset.data} presetStart={presetStart} presetPro={prof || undefined} defaultMin={sched.slotMin} plan={plan} convenio={!!clinic.accepts_insurance} /></MobileCollapse></div>}
       {!sched.hasHours && writable && (
         <p className="mb-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">Cadastre o horário de atendimento em <Link className="underline" href="/app/configuracoes#horarios">Clínica e equipe</Link> para os horários livres aparecerem aqui e serem oferecidos pelo WhatsApp.</p>
       )}
@@ -179,7 +200,8 @@ export default async function AgendaPage({ searchParams }: { searchParams: Promi
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 text-sm" role="group" aria-label="Modo de visualização">
-          <Link href={qs({ modo: 'grade' })} aria-current={modo === 'grade' ? 'page' : undefined} className={`rounded-md px-3 py-1 ${modo === 'grade' ? 'bg-ink text-white' : ''}`}>Grade</Link>
+          <Link href={qs({ modo: 'dia', dia: diaSel })} aria-current={modo === 'dia' ? 'page' : undefined} className={`rounded-md px-3 py-1 ${modo === 'dia' ? 'bg-ink text-white' : ''}`}>Dia</Link>
+          <Link href={qs({ modo: 'grade' })} aria-current={modo === 'grade' ? 'page' : undefined} className={`rounded-md px-3 py-1 ${modo === 'grade' ? 'bg-ink text-white' : ''}`}>Semana</Link>
           <Link href={qs({ modo: 'lista' })} aria-current={modo === 'lista' ? 'page' : undefined} className={`rounded-md px-3 py-1 ${modo === 'lista' ? 'bg-ink text-white' : ''}`}>Lista</Link>
         </div>
         {(pros.data || []).length > 0 && (
@@ -190,12 +212,18 @@ export default async function AgendaPage({ searchParams }: { searchParams: Promi
         )}
       </div>
 
-      {modo === 'grade' ? (
+      {modo !== 'lista' ? (
         <>
           <div className="overflow-x-auto rounded-xl bg-white shadow-sm">
-            <div className="grid min-w-[900px]" style={{ gridTemplateColumns: '52px repeat(7, minmax(0, 1fr))' }}>
+            <div className={`grid ${modo === 'dia' ? '' : 'min-w-[900px]'}`} style={{ gridTemplateColumns: `${modo === 'dia' ? '44px' : '52px'} repeat(${gridDays.length}, minmax(0, 1fr))` }}>
               <div />
-              {days.map((d) => (
+              {modo === 'dia' ? (
+                <div className="flex items-center justify-between border-b border-l border-slate-100 px-1 py-1.5 text-sm font-semibold">
+                  <Link href={qs({ modo: 'dia', semana: mondayOf(diaPrev), dia: diaPrev })} className="rounded px-3 py-1 hover:bg-slate-100" aria-label="Dia anterior">‹</Link>
+                  <span>{gridDays[0]?.title}{diaSel === hojeIso ? ' · hoje' : ''}</span>
+                  <Link href={qs({ modo: 'dia', semana: mondayOf(diaNext), dia: diaNext })} className="rounded px-3 py-1 hover:bg-slate-100" aria-label="Próximo dia">›</Link>
+                </div>
+              ) : days.map((d) => (
                 <Link key={d.key} href={qs({ dia: d.iso }) + '#dia'} className={`border-b border-l border-slate-100 px-2 py-2 text-center text-sm font-semibold hover:bg-slate-50 ${d.iso === dia ? 'bg-slate-100' : ''}`}>{d.title}</Link>
               ))}
               <div className="relative" style={{ height: (h1 - h0) * PX }}>
@@ -203,7 +231,7 @@ export default async function AgendaPage({ searchParams }: { searchParams: Promi
                   <span key={i} className="absolute right-1 -translate-y-1/2 text-[11px] text-slate-400" style={{ top: i * 60 * PX }}>{String((h0 + i * 60) / 60).padStart(2, '0')}:00</span>
                 ))}
               </div>
-              {days.map((d) => {
+              {gridDays.map((d) => {
                 // colunas lado a lado quando há consultas ao mesmo tempo
                 const evs = d.items.map((a) => ({ a, s: new Date(a.starts_at).getTime(), e: new Date(a.ends_at).getTime(), lane: 0, lanes: 1 })).sort((x, y) => x.s - y.s || y.e - x.e);
                 const ends: number[] = [];
@@ -246,7 +274,7 @@ export default async function AgendaPage({ searchParams }: { searchParams: Promi
               })}
             </div>
           </div>
-          <p className="mt-2 text-xs text-slate-500">Toque numa consulta ou no dia para ver os botões (confirmar, realizado, pagamento). Toque num horário livre para agendar nele.</p>
+          <p className="mt-2 text-xs text-slate-500">{modo === 'dia' ? 'Toque numa consulta para ver os botões (confirmar, realizado, pagamento) logo abaixo. Toque num horário livre para agendar nele.' : 'Toque numa consulta ou no dia para ver os botões (confirmar, realizado, pagamento). Toque num horário livre para agendar nele.'}</p>
           {detail && (
             <section id="dia" className="mt-6 scroll-mt-24" aria-labelledby="dia-t">
               <h2 id="dia-t" className="mb-2 font-semibold">{detail.title}</h2>

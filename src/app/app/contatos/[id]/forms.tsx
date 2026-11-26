@@ -5,8 +5,9 @@ import { addActivity, createDeal, updateContact, updateDeal } from '../../crm-ac
 import { SOURCES } from '@/lib/sources';
 import type { Contact } from '@/lib/types';
 import { waLink } from '@/lib/utils';
+import { InsuranceFields } from '@/components/insurance-fields';
 
-export function EditContact({ c, readOnly }: { c: Contact; readOnly: boolean }) {
+export function EditContact({ c, readOnly, insurances = [], accepts = false }: { c: Contact; readOnly: boolean; insurances?: string[]; accepts?: boolean }) {
   const [s, act] = useActionState(updateContact, null);
   return (
     <form action={act} className="card space-y-3">
@@ -18,6 +19,7 @@ export function EditContact({ c, readOnly }: { c: Contact; readOnly: boolean }) 
         <div><label className="label" htmlFor="e-email">E-mail</label><input id="e-email" name="email" type="email" defaultValue={c.email || ''} className="field" /></div>
         <div><label className="label" htmlFor="e-doc">CPF (sai no recibo, para reembolso)</label><input id="e-doc" name="document" inputMode="numeric" maxLength={20} defaultValue={c.document || ''} className="field" /></div>
         <div><label className="label" htmlFor="e-birth">Nascimento</label><input id="e-birth" name="birth_date" type="date" defaultValue={c.birth_date || ''} className="field" /></div>
+        <InsuranceFields idp="e" list={insurances} accepts={accepts} c={c} />
         <div><label className="label" htmlFor="e-src">Origem</label><select id="e-src" name="source" defaultValue={c.source} className="field">{SOURCES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
         <div><label className="label" htmlFor="e-tags">Etiquetas (vírgula)</label><input id="e-tags" name="tags" defaultValue={(c.tags || []).join(', ')} className="field" /></div>
         <div className="sm:col-span-2"><label className="label" htmlFor="e-notes">Observações</label><textarea id="e-notes" name="notes" rows={3} defaultValue={c.notes || ''} className="field" /></div>

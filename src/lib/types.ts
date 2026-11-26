@@ -12,6 +12,7 @@ export interface Clinic {
   trial_ends_at: string; past_due_since: string | null; source: string; owner_id: string | null; created_at: string;
   slot_procedure_id: string | null; slot_minutes: number; slot_capacity: number; slot_days_ahead: number;
   waitlist_webhook_url: string | null; reminder_template: string | null;
+  accepts_insurance?: boolean; insurances?: string[];
 }
 
 export interface Stage { id: string; clinic_id: string; name: string; position: number; kind: 'open' | 'won' | 'lost'; color: string }
@@ -19,6 +20,7 @@ export interface Contact {
   id: string; clinic_id: string; name: string; phone: string | null; email: string | null; birth_date: string | null;
   source: string; source_detail: string | null; tags: string[]; notes: string | null; consent_whatsapp: boolean;
   last_visit_at: string | null; created_at: string; updated_at: string; document?: string | null;
+  insurance?: string | null; insurance_card?: string | null; insurance_plan?: string | null; insurance_valid?: string | null;
 }
 export interface Deal {
   id: string; clinic_id: string; contact_id: string; stage_id: string; procedure_id: string | null; title: string;

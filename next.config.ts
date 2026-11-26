@@ -13,6 +13,8 @@ const nextConfig: NextConfig = {
   eslint: { ignoreDuringBuilds: true },
   images: { remotePatterns: [{ protocol: 'https', hostname: '*.supabase.co' }] },
   experimental: { serverActions: { bodySizeLimit: '12mb' } },
+  // NFS-e: assinatura XML e TLS mútuo rodam no Node, fora do bundle
+  serverExternalPackages: ['nfse-js', 'node-forge', 'xml-crypto', '@xmldom/xmldom'],
   async headers() {
     return [{ source: '/(.*)', headers: securityHeaders }];
   },

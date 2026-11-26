@@ -3,8 +3,8 @@ import { cn } from '@/lib/utils';
 export function PageHeader({ title, desc, children }: { title: string; desc?: string; children?: React.ReactNode }) {
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
-      <div>
-        <h1 className="font-display text-2xl font-bold text-slate-900">{title}</h1>
+      <div className="min-w-0">
+        <h1 className="font-display text-xl font-bold text-slate-900 sm:text-2xl">{title}</h1>
         {desc && <p className="mt-1 max-w-2xl text-sm text-slate-600">{desc}</p>}
       </div>
       {children && <div className="flex flex-wrap gap-2">{children}</div>}
@@ -31,9 +31,9 @@ export function Empty({ title, children }: { title: string; children?: React.Rea
 
 export function Stat({ label, value, hint }: { label: string; value: React.ReactNode; hint?: string }) {
   return (
-    <div className="card">
-      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-2 font-display text-3xl font-bold text-slate-900">{value}</p>
+    <div className="card min-w-0">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 sm:text-xs">{label}</p>
+      <p className="mt-2 whitespace-nowrap font-display text-[clamp(1rem,4.4vw,1.875rem)] font-bold leading-tight text-slate-900 sm:text-3xl">{value}</p>
       {hint && <p className="mt-1 text-xs text-slate-500">{hint}</p>}
     </div>
   );

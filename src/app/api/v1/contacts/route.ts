@@ -2,12 +2,13 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { v1 } from '@/lib/v1';
 import { normPhone } from '@/lib/utils';
+import { applyContactInsurance } from '@/lib/insurance-db';
 
 // GET ?phone=5519... | ?inactive_days=180 | ?birthday=MM-DD  (para as automações)
 export async function GET(req: Request) {
   const a = await v1(req); if ('error' in a) return a.error;
   const u = new URL(req.url);
-  let q = a.db.from('contacts').select('id, name, phone, email, birth_date, source, tags, last_visit_at, consent_whatsapp, created_at').eq('clinic_id', a.clinicId).limit(1000);
+  let q = a.db.from('contacts').select('id, name, phone, email, birth_date, source, tags, last_visit_at, consent_whatsapp, created_at, insurance, insurance_card, insurance_plan').eq('clinic_id', a.clinicId).limit(1000);
   const phone = normPhone(u.searchParams.get('phone'));
   if (u.searchParams.get('phone')) q = q.eq('phone', phone || '-');
   const inactive = Number(u.searchParams.get('inactive_days'));
@@ -25,6 +26,8 @@ export async function POST(req: Request) {
   const b = z.object({
     name: z.string().trim().min(1).max(160), phone: z.string(), source: z.string().max(40).default('whatsapp'),
     source_detail: z.string().max(200).optional(), notes: z.string().max(2000).optional(), deal_title: z.string().max(120).optional(),
+    // convênio informado pelo lead (vazio ou "particular" = sem convênio)
+    convenio: z.string().max(80).optional(), carteirinha: z.string().max(40).optional(), plano: z.string().max(80).optional(),
   }).safeParse(await req.json().catch(() => ({})));
   if (!b.success) return NextResponse.json({ error: b.error.issues[0].message }, { status: 400 });
   const phone = normPhone(b.data.phone);
@@ -32,11 +35,14 @@ export async function POST(req: Request) {
   const { data: found } = await a.db.from('contacts').select('id').eq('clinic_id', a.clinicId).eq('phone', phone).maybeSingle();
   if (found) {
     await a.db.from('activities').insert({ clinic_id: a.clinicId, contact_id: found.id, type: 'sistema', body: `Novo contato pelo ${b.data.source}${b.data.source_detail ? ' — ' + b.data.source_detail : ''}${b.data.notes ? '\n' + b.data.notes : ''}` });
-    return NextResponse.json({ id: found.id, created: false });
+    const convenio = await applyContactInsurance(a.db, a.clinicId, found.id, b.data);
+    return NextResponse.json({ id: found.id, created: false, convenio });
   }
   const { data: c, error } = await a.db.from('contacts').insert({ clinic_id: a.clinicId, name: b.data.name, phone, source: b.data.source, source_detail: b.data.source_detail, notes: b.data.notes }).select('id').single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   const { data: st } = await a.db.from('stages').select('id').eq('clinic_id', a.clinicId).eq('kind', 'open').order('position').limit(1).single();
-  if (st) await a.db.from('deals').insert({ clinic_id: a.clinicId, contact_id: c.id, stage_id: st.id, title: b.data.deal_title || 'Avaliação', value: 0 });
-  return NextResponse.json({ id: c.id, created: true }, { status: 201 });
+  const convenio = await applyContactInsurance(a.db, a.clinicId, c.id, b.data);
+  if (st) await a.db.from('deals').insert({ clinic_id: a.clinicId, contact_id: c.id, stage_id: st.id, title: b.data.deal_title || (convenio === 'aceito' ? `Avaliação (convênio)` : 'Avaliação'), value: 0 });
+  // convenio: 'aceito' (a clínica atende), 'nao_atendido' (ofereça particular) ou null (particular)
+  return NextResponse.json({ id: c.id, created: true, convenio }, { status: 201 });
 }

@@ -3,7 +3,7 @@ import { useActionState, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { FormMsg, Submit } from '@/components/ui';
 import type { Brand, Clinic } from '@/lib/types';
-import { createApiKey, inviteMember, saveAutomationSettings, saveBrand, saveClinic, saveProcedure, saveProfessional, saveProfessionalProcedures, saveStage } from './actions';
+import { createApiKey, inviteMember, saveAutomationSettings, saveInsurances, saveBrand, saveClinic, saveProcedure, saveProfessional, saveProfessionalProcedures, saveStage } from './actions';
 import { DEFAULT_REMINDER, REMINDER_VARS } from '@/lib/reminder';
 
 async function upload(clinicId: string, folder: string, f: File) {
@@ -199,6 +199,28 @@ export function ProfessionalProcedures({ pro, procs, current, disabled }: {
       </div>
       {!disabled && <div className="flex items-center gap-3"><button type="button" onClick={save} disabled={busy} className="btn btn-sec">{busy ? 'Salvando...' : `Salvar procedimentos (${count || 'todos'})`}</button><FormMsg state={msg} /></div>}
     </fieldset>
+  );
+}
+
+export function InsuranceSettings({ accepts, list, disabled }: { accepts: boolean; list: string[]; disabled: boolean }) {
+  const [s, act] = useActionState(saveInsurances, null);
+  const [on, setOn] = useState(accepts);
+  return (
+    <form id="convenios" action={act} className="card space-y-3">
+      <h2 className="font-semibold">Convênios</h2>
+      <p className="text-sm text-slate-600">Ligado, o paciente pode ter convênio no cadastro, a consulta sai como &quot;convênio&quot; (com nº da guia) e o valor vai para &quot;A receber de convênios&quot;, fora da cobrança do paciente pelo WhatsApp. Leads que chegam pelas automações com convênio entram já identificados.</p>
+      <fieldset disabled={disabled} className="space-y-3">
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="accepts_insurance" checked={on} onChange={(e) => setOn(e.target.checked)} /> A clínica atende convênio</label>
+        {on && (
+          <div>
+            <label className="label" htmlFor="cv-list">Convênios atendidos (um por linha)</label>
+            <textarea id="cv-list" name="insurances" rows={5} defaultValue={list.join('\n')} placeholder={'Amil Dental\nOdontoprev\nBradesco Dental\nSulAmérica Odonto'} className="field" />
+            <p className="mt-1 text-xs text-slate-500">O nome é comparado sem acento e sem maiúsculas: &quot;odontoprev&quot; e &quot;OdontoPrev&quot; são o mesmo convênio.</p>
+          </div>
+        )}
+      </fieldset>
+      {!disabled && <div className="flex items-center gap-3"><Submit>Salvar</Submit><FormMsg state={s} /></div>}
+    </form>
   );
 }
 

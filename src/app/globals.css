@@ -27,3 +27,27 @@ html, body { background: #F6F7FB; color: #0F172A; }
   .tbl th { @apply border-b border-slate-200 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500; }
   .tbl td { @apply border-b border-slate-100 px-3 py-2 align-top; }
 }
+
+/* ---------- Celular ---------------------------------------------------------
+   Tabelas viram cartões empilhados: cada célula mostra o nome da coluna (data-label,
+   preenchido pelo TableLabels). Assim nada sai da tela e não precisa rolar de lado. */
+@media (max-width: 639.98px) {
+  .tbl, .tbl tbody, .tbl tfoot, .tbl tr, .tbl td { display: block; width: 100%; }
+  .tbl thead { display: none; }
+  .tbl { min-width: 0 !important; }
+  .tbl tr { padding: 0.6rem 0.25rem; border-bottom: 1px solid #e2e8f0; }
+  .tbl tr:last-child { border-bottom: 0; }
+  .tbl td { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; border: 0; padding: 0.2rem 0.75rem; text-align: right; overflow-wrap: anywhere; }
+  .tbl td > * { min-width: 0; }
+  .tbl td::before { content: attr(data-label); flex: none; max-width: 42%; padding-top: 0.15rem; text-align: left; font-size: 0.68rem; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; color: #64748b; }
+  .tbl td:first-child { justify-content: flex-start; text-align: left; font-weight: 600; font-size: 0.95rem; }
+  .tbl td:first-child::before, .tbl td:not([data-label])::before, .tbl td[data-label=""]::before { display: none; }
+  .tbl td:not([data-label]), .tbl td[data-label=""] { justify-content: flex-start; text-align: left; }
+  .tbl td:empty { display: none; }
+  .tbl td .flex { justify-content: flex-end; }
+  .tbl td:not([data-label]) .flex, .tbl td[data-label=""] .flex { justify-content: flex-start; }
+  /* cartões e formulários um pouco mais compactos */
+  .card { padding: 1rem; }
+  input, select, textarea { font-size: 16px; } /* evita o zoom automático do iPhone ao tocar no campo */
+}
+details.mcollapse > summary::-webkit-details-marker { display: none; }

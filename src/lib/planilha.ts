@@ -3,18 +3,21 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { normPhone } from '@/lib/utils';
 import { freeSlotsPros, rowToSlot, slotId, slotRow, VIRTUAL_ROW0 } from '@/lib/slots';
 import { checkFit, freePro, loadSchedule } from '@/lib/schedule';
+import { cleanInsurance, decidePayer, acceptedInsurance, type InsClinic } from '@/lib/insurance';
+import { applyContactInsurance, insClinic } from '@/lib/insurance-db';
 
 /**
  * Adaptador "planilha" para as automações da biblioteca Fluxa (n8n).
  * Os fluxos foram feitos para o Google Sheets: leem abas com cabeçalho e gravam "Aba!ColunaLinha".
  * Aqui cada aba vira uma visão das tabelas do sistema, com a coluna extra `_row` (linha estável do registro).
  * Assim os mesmos fluxos funcionam com o sistema trocando só o endereço (usa_sistema = SIM no Config).
+ * Colunas novas entram DEPOIS de `_row`, para não mudar a letra das colunas que os fluxos já usam.
  */
 
 export const HEADERS: Record<string, string[]> = {
-  Agenda: ['id', 'nome', 'telefone', 'data_hora', 'profissional', 'procedimento', 'status', 'lembrete1_em', 'lembrete2_em', 'alerta_em', 'confirmado_em', 'pos_enviado_em', 'avaliacao_pedida_em', 'nota', '_row'],
-  Pacientes: ['id', 'nome', 'telefone', 'nascimento', 'ultimo_atendimento', 'proximo_agendamento', 'procedimento_ultimo', 'reativacao_em', 'retorno_msg_em', 'aniversario_enviado_ano', '_row'],
-  Leads: ['id', 'nome', 'telefone', 'origem', 'criado_em', 'avaliacao_em', 'status', 'agenda_id', '_row'],
+  Agenda: ['id', 'nome', 'telefone', 'data_hora', 'profissional', 'procedimento', 'status', 'lembrete1_em', 'lembrete2_em', 'alerta_em', 'confirmado_em', 'pos_enviado_em', 'avaliacao_pedida_em', 'nota', '_row', 'pagamento', 'convenio', 'guia'],
+  Pacientes: ['id', 'nome', 'telefone', 'nascimento', 'ultimo_atendimento', 'proximo_agendamento', 'procedimento_ultimo', 'reativacao_em', 'retorno_msg_em', 'aniversario_enviado_ano', '_row', 'convenio', 'carteirinha'],
+  Leads: ['id', 'nome', 'telefone', 'origem', 'criado_em', 'avaliacao_em', 'status', 'agenda_id', '_row', 'convenio', 'carteirinha', 'convenio_aceito'],
   Optout: ['telefone', '_row'],
   Espera: ['id', 'nome', 'telefone', 'procedimento', 'desde', 'status', 'oferta_em', 'ultima_oferta_slot', '_row'],
   Financeiro: ['id', 'nome', 'telefone', 'valor', 'vencimento', 'status', 'etapa_cobranca', 'link_pagamento', 'ultima_cobranca_em', 'alerta_gestor_em', '_row'],
@@ -92,19 +95,20 @@ export async function readTab(db: Db, cid: string, tab: string): Promise<string[
   if (tab === 'Agenda') {
     const from = new Date(now - 120 * 86400000).toISOString(), to = new Date(now + 120 * 86400000).toISOString();
     const list = await all<Obj>((a, b) => db.from('appointments')
-      .select('id, starts_at, ends_at, status, meta, sheet_row, procedure_text, professional_id, contact:contacts(name, phone), professional:professionals(name), procedure:procedures(name)')
+      .select('id, starts_at, ends_at, status, meta, sheet_row, procedure_text, professional_id, payer, insurance, insurance_auth, contact:contacts(name, phone), professional:professionals(name), procedure:procedures(name)')
       .eq('clinic_id', cid).gte('starts_at', from).lt('starts_at', to).order('sheet_row').range(a, b));
     const rows = list.map((r) => {
       const c = (r.contact as Obj) || {}, m = meta(r);
       return row({ ...m, id: r.id, nome: c.name, telefone: c.phone, data_hora: fmtDT(r.starts_at as string), profissional: (r.professional as Obj)?.name,
-        procedimento: (r.procedure as Obj)?.name || r.procedure_text || m.procedimento, status: r.status, _row: r.sheet_row });
+        procedimento: (r.procedure as Obj)?.name || r.procedure_text || m.procedimento, status: r.status, _row: r.sheet_row,
+        pagamento: r.payer, convenio: r.insurance || '', guia: r.insurance_auth || '' });
     });
     return [H, ...rows, ...(await virtualFree(db, cid, list)).map(row)];
   }
 
   if (tab === 'Pacientes' || tab === 'Leads' || tab === 'Optout') {
     const q = (a: number, b: number) => {
-      let x = db.from('contacts').select('id, name, phone, birth_date, last_visit_at, consent_whatsapp, source_detail, created_at, meta, sheet_row').eq('clinic_id', cid);
+      let x = db.from('contacts').select('id, name, phone, birth_date, last_visit_at, consent_whatsapp, source_detail, created_at, meta, sheet_row, insurance, insurance_card').eq('clinic_id', cid);
       if (tab === 'Leads') x = x.eq('meta->>lead', 'sim');
       if (tab === 'Optout') x = x.eq('consent_whatsapp', false);
       return x.order('sheet_row').range(a, b);
@@ -115,7 +119,9 @@ export async function readTab(db: Db, cid: string, tab: string): Promise<string[
       return [H, ...list.filter((c) => c.phone).map((c) => row({ telefone: c.phone, _row: c.sheet_row })), ...extra.map((r) => row({ telefone: (r.data as Obj).telefone, _row: 'x' + r.sheet_row }))];
     }
     if (tab === 'Leads') {
-      return [H, ...list.map((c) => { const m = meta(c); return row({ ...m, id: m.lead_id || c.id, nome: c.name, telefone: c.phone, origem: m.origem || c.source_detail, criado_em: m.criado_em || fmtDT(c.created_at as string), _row: c.sheet_row }); })];
+      const ic = await insClinic(db, cid);
+      return [H, ...list.map((c) => { const m = meta(c); return row({ ...m, id: m.lead_id || c.id, nome: c.name, telefone: c.phone, origem: m.origem || c.source_detail, criado_em: m.criado_em || fmtDT(c.created_at as string), _row: c.sheet_row,
+        convenio: c.insurance || '', carteirinha: c.insurance_card || '', convenio_aceito: c.insurance ? (acceptedInsurance(ic, c.insurance as string) ? 'sim' : 'nao') : '' }); })];
     }
     // Pacientes: último atendimento, próximo agendamento e último procedimento vêm da agenda
     const done = await all<Obj>((a, b) => db.from('appointments').select('contact_id, starts_at, procedure_text, procedure:procedures(name), meta')
@@ -129,7 +135,8 @@ export async function readTab(db: Db, cid: string, tab: string): Promise<string[
       const m = meta(c), l = last.get(c.id as string);
       const lv = [l?.starts_at as string | undefined, c.last_visit_at as string | undefined].filter(Boolean).sort().pop();
       return row({ ...m, id: c.id, nome: c.name, telefone: c.phone, nascimento: c.birth_date || '', ultimo_atendimento: fmtD(lv), proximo_agendamento: fmtDT(nx.get(c.id as string)),
-        procedimento_ultimo: (l?.procedure as Obj)?.name || l?.procedure_text || meta(l || {}).procedimento || '', _row: c.sheet_row });
+        procedimento_ultimo: (l?.procedure as Obj)?.name || l?.procedure_text || meta(l || {}).procedimento || '', _row: c.sheet_row,
+        convenio: c.insurance || '', carteirinha: c.insurance_card || '' });
     })];
   }
 
@@ -141,7 +148,7 @@ export async function readTab(db: Db, cid: string, tab: string): Promise<string[
 
   if (tab === 'Financeiro') {
     const list = await all<Obj>((a, b) => db.from('charges').select('id, amount, due_date, status, payment_link, meta, sheet_row, contact:contacts(name, phone)')
-      .eq('clinic_id', cid).neq('status', 'cancelado').order('sheet_row').range(a, b));
+      .eq('clinic_id', cid).neq('status', 'cancelado').eq('payer', 'paciente').order('sheet_row').range(a, b));
     return [H, ...list.map((r) => { const c = (r.contact as Obj) || {}; return row({ ...meta(r), id: r.id, nome: c.name, telefone: c.phone, valor: Number(r.amount).toFixed(2), vencimento: r.due_date, status: r.status, link_pagamento: r.payment_link, _row: r.sheet_row }); })];
   }
 
@@ -159,6 +166,16 @@ async function contactByPhone(db: Db, cid: string, phone: string | null, name?: 
   const { data: c, error } = await db.from('contacts').insert({ clinic_id: cid, name: name || phone, phone, source: 'whatsapp', ...extra }).select('id, meta').single();
   if (error) throw new Error(error.message);
   return c as { id: string; meta: Obj };
+}
+
+/** Pagamento pedido pela automação (colunas pagamento/convenio da Agenda) ou o convênio do paciente. */
+async function payerOf(db: Db, cid: string, contactId: string | null | undefined, sets: Record<string, string>, ic?: InsClinic) {
+  if (!contactId) return { payer: 'particular' as const, insurance: null, insurance_auth: null };
+  const clinic = ic || (await insClinic(db, cid));
+  const { data: ct } = await db.from('contacts').select('insurance').eq('id', contactId).maybeSingle();
+  const want = /conv/i.test(sets.pagamento || '') || (cleanInsurance(sets.convenio) && !/partic/i.test(sets.pagamento || '')) ? 'convenio' : /partic/i.test(sets.pagamento || '') ? 'particular' : '';
+  const p = decidePayer(clinic, ct?.insurance, want, sets.convenio);
+  return { payer: p.payer, insurance: p.insurance, insurance_auth: p.payer === 'convenio' ? (sets.guia || '').trim().slice(0, 40) || null : null };
 }
 
 async function byName(db: Db, table: 'procedures' | 'professionals', cid: string, name: string) {
@@ -196,15 +213,17 @@ async function bookVirtual(db: Db, cid: string, row: number, sets: Record<string
   if (fit.full || !fit.inside || fit.proBusy) throw new Error('Agenda: esse horário acabou de ser ocupado');
   const c = await contactByPhone(db, cid, phone, sets.nome);
   const m: Obj = {};
-  for (const [k, v] of Object.entries(sets)) if (!['id', '_row', 'nome', 'telefone', 'data_hora', 'status', 'procedimento', 'profissional'].includes(k) && v) m[k] = v;
+  for (const [k, v] of Object.entries(sets)) if (!['id', '_row', 'nome', 'telefone', 'data_hora', 'status', 'procedimento', 'profissional', 'pagamento', 'convenio', 'guia', 'carteirinha'].includes(k) && v) m[k] = v;
   m.slot_id = slotId(start);
+  if (cleanInsurance(sets.convenio)) await applyContactInsurance(db, cid, c!.id, { convenio: sets.convenio, carteirinha: sets.carteirinha });
+  const pay = await payerOf(db, cid, c!.id, sets);
   const { error } = await db.from('appointments').insert({
     clinic_id: cid, contact_id: c!.id, status, starts_at: new Date(start).toISOString(), ends_at: new Date(end).toISOString(),
     procedure_id: proc?.id || null, procedure_text: proc ? null : (sets.procedimento || null), price: proc?.price ?? null,
-    professional_id: proId, meta: m,
+    professional_id: proId, meta: m, ...pay,
   });
   if (error) throw new Error('Agenda: ' + error.message);
-  await db.from('activities').insert({ clinic_id: cid, contact_id: c!.id, type: 'sistema', body: `Automação: consulta ${status} pelo WhatsApp (${dur} min).` });
+  await db.from('activities').insert({ clinic_id: cid, contact_id: c!.id, type: 'sistema', body: `Automação: consulta ${status} pelo WhatsApp (${dur} min${pay.payer === 'convenio' ? `, convênio ${pay.insurance}` : ''}).` });
 }
 
 async function timeline(db: Db, cid: string, phone: string | null, body: string, type: 'whatsapp' | 'sistema' = 'sistema') {
@@ -245,7 +264,12 @@ async function updateAppointment(db: Db, cid: string, row: number, sets: Record<
       if (pr) { patch.procedure_id = pr.id; patch.procedure_text = null; } else if (v) { patch.procedure_text = v.slice(0, 120); }
     } else if (k === 'profissional') {
       const id = await byName(db, 'professionals', cid, v); if (id) patch.professional_id = id;
+    } else if (k === 'pagamento' || k === 'convenio' || k === 'guia') {
+      // tratado logo abaixo
     } else m[k] = v;
+  }
+  if (sets.pagamento !== undefined || sets.convenio !== undefined || sets.guia !== undefined) {
+    Object.assign(patch, await payerOf(db, cid, (patch.contact_id as string) || a.contact_id, sets));
   }
   patch.meta = m;
   const { error } = await db.from('appointments').update(patch).eq('id', a.id);
@@ -266,6 +290,9 @@ async function updateContact(db: Db, cid: string, tab: string, row: number, sets
     if (k === 'nome') { if (v.trim()) patch.name = v.trim(); }
     else if (k === 'telefone') { const p = normPhone(v); if (p) patch.phone = p; }
     else if (k === 'nascimento') patch.birth_date = parseDate(v);
+    else if (k === 'convenio') patch.insurance = cleanInsurance(v);
+    else if (k === 'carteirinha') patch.insurance_card = v.trim().slice(0, 40) || null;
+    else if (k === 'convenio_aceito') { /* calculado pelo sistema */ }
     else m[k] = v;
   }
   patch.meta = m;
@@ -346,6 +373,11 @@ export async function append(db: Db, cid: string, tab: string, rows: unknown[][]
         if (st) await db.from('deals').insert({ clinic_id: cid, contact_id: c.id, stage_id: st.id, title: 'Avaliação', value: 0 });
       }
       await db.from('activities').insert({ clinic_id: cid, contact_id: c.id, type: 'whatsapp', body: `Lead entrou pelo WhatsApp (${o.origem || 'sem origem'}).` });
+      const ins = await applyContactInsurance(db, cid, c.id, { convenio: o.convenio, carteirinha: o.carteirinha });
+      if (ins === 'aceito') {
+        const { data: ct } = await db.from('contacts').select('insurance').eq('id', c.id).maybeSingle();
+        await db.from('deals').update({ title: `Avaliação (convênio ${ct?.insurance})` }).eq('contact_id', c.id).is('closed_at', null).eq('title', 'Avaliação');
+      }
     } else if (tab === 'Agenda') {
       const iso = parseDT(o.data_hora);
       if (!iso) throw new Error('Agenda: data_hora inválida no append');
@@ -355,13 +387,16 @@ export async function append(db: Db, cid: string, tab: string, rows: unknown[][]
       const proc = await procByName(db, cid, o.procedimento);
       const dur = proc?.duration_min || (await loadSchedule(db, cid)).slotMin || 60;
       const status = APPT_STATUS.has(o.status) ? o.status : (c ? 'agendado' : 'livre');
+      if (c && cleanInsurance(o.convenio)) await applyContactInsurance(db, cid, c.id, { convenio: o.convenio });
+      const pay = await payerOf(db, cid, c?.id, o);
       const { error } = await db.from('appointments').insert({ clinic_id: cid, contact_id: c?.id || null, starts_at: iso, ends_at: new Date(new Date(iso).getTime() + dur * 60000).toISOString(),
         status, procedure_id: proc?.id || null, procedure_text: proc ? null : (o.procedimento || null), price: proc?.price ?? null,
-        professional_id: await byName(db, 'professionals', cid, o.profissional), meta: m });
+        professional_id: await byName(db, 'professionals', cid, o.profissional), meta: m, ...pay });
       if (error) throw new Error('Agenda: ' + error.message);
     } else if (tab === 'Pacientes') {
       const c = await contactByPhone(db, cid, normPhone(o.telefone), o.nome);
       if (c && o.nascimento) await db.from('contacts').update({ birth_date: parseDate(o.nascimento) }).eq('id', c.id);
+      if (c && cleanInsurance(o.convenio)) await applyContactInsurance(db, cid, c.id, { convenio: o.convenio, carteirinha: o.carteirinha });
     } else if (tab === 'Espera') {
       const c = await contactByPhone(db, cid, normPhone(o.telefone), o.nome);
       if (c) await db.from('waitlist').insert({ clinic_id: cid, contact_id: c.id, procedure_id: await byName(db, 'procedures', cid, o.procedimento), procedure_text: o.procedimento || null, status: ['aguardando', 'ofertado', 'agendado'].includes(o.status) ? o.status : 'aguardando' });

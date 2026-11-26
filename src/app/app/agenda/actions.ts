@@ -1,6 +1,7 @@
 'use server';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
+import { decidePayer } from '@/lib/insurance';
 import { getContext } from '@/lib/clinic';
 import { localToIso } from '@/lib/utils';
 import { checkFit, freePro, loadSchedule, nextFreePro } from '@/lib/schedule';
@@ -26,6 +27,8 @@ export async function createAppointment(_: S, fd: FormData): Promise<S> {
     duration: z.coerce.number({ error: 'Duração inválida' }).int('Duração em minutos inteiros').min(5, 'Duração mínima de 5 minutos').max(600, 'Duração máxima de 600 minutos'),
     notes: z.string().max(1000).optional(),
     quote_item_id: z.string().uuid().or(z.literal('')).optional(),
+    payer: z.enum(['', 'particular', 'convenio']).optional(),
+    insurance_auth: z.string().max(40, 'Nº da guia: no máximo 40 caracteres').optional(),
   }).safeParse(Object.fromEntries(fd));
   if (!p.success) return { error: p.error.issues[0].message };
   const d = p.data;
@@ -56,6 +59,14 @@ export async function createAppointment(_: S, fd: FormData): Promise<S> {
       if (Number.isNaN(v)) return { error: 'Preço inválido. Use só números, ex.: 250 ou 250,00.' };
       price = v;
     }
+  }
+
+  // Quem paga: o convênio do paciente (se a clínica atende) ou particular
+  let pay: { payer: 'particular' | 'convenio'; insurance: string | null; error?: string } = { payer: 'particular', insurance: null };
+  if (!livre && d.contact_id && !planItem) {
+    const { data: ct } = await supabase.from('contacts').select('insurance').eq('id', d.contact_id).eq('clinic_id', clinic.id).maybeSingle();
+    pay = decidePayer(clinic, ct?.insurance, d.payer || '');
+    if (pay.error) return { error: pay.error };
   }
 
   const start = localToIso(d.starts_at);
@@ -93,12 +104,13 @@ export async function createAppointment(_: S, fd: FormData): Promise<S> {
     clinic_id: clinic.id, contact_id: livre ? null : d.contact_id, status: livre ? 'livre' : 'agendado', professional_id: proId,
     procedure_id: procId, procedure_text: procText, price: planItem ? null : price, quote_item_id: planItem?.id || null,
     starts_at: start, ends_at: end, notes: d.notes || null, created_by: user.id,
+    payer: pay.payer, insurance: pay.insurance, insurance_auth: pay.payer === 'convenio' ? (d.insurance_auth || '').trim() || null : null,
     meta: { ...(d.encaixe === 'on' ? { encaixe: 'sim' } : {}), ...(planItem ? { plano: 'sim' } : {}) },
   });
   if (error) return { error: error.message };
   revalidatePath('/app/agenda');
   if (d.contact_id) revalidatePath(`/app/contatos/${d.contact_id}`);
-  return { ok: livre ? 'Horário livre extra criado. As automações oferecem ele a quem pedir pelo WhatsApp.' : `Consulta agendada (${d.duration} min, até ${fmtHM(t1)}${proName ? `, com ${proName}` : ''}).${planItem ? ' Sessão do plano: já cobrada no orçamento.' : ''}${aviso}` };
+  return { ok: livre ? 'Horário livre extra criado. As automações oferecem ele a quem pedir pelo WhatsApp.' : `Consulta agendada (${d.duration} min, até ${fmtHM(t1)}${proName ? `, com ${proName}` : ''}).${planItem ? ' Sessão do plano: já cobrada no orçamento.' : ''}${pay.payer === 'convenio' ? ` Convênio: ${pay.insurance}.` : ''}${aviso}` };
 }
 
 const payFields = (fd: FormData) => ({
@@ -131,6 +143,20 @@ export async function setAppointmentStatus(fd: FormData) {
   revalidatePath('/app/agenda');
   revalidatePath('/app/financeiro');
   revalidatePath('/app');
+}
+
+/** Troca quem paga a consulta (particular ↔ convênio) e o nº da guia. A cobrança acompanha (gatilho do banco). */
+export async function setAppointmentPayer(fd: FormData) {
+  const { supabase, clinic } = await getContext();
+  const id = z.string().uuid().parse(fd.get('id'));
+  const want = z.enum(['particular', 'convenio']).parse(fd.get('payer'));
+  const { data: a } = await supabase.from('appointments').select('contact_id, quote_item_id, contact:contacts(insurance)').eq('id', id).eq('clinic_id', clinic.id).maybeSingle();
+  if (!a || a.quote_item_id) return;
+  const p = decidePayer(clinic, (a.contact as unknown as { insurance: string | null } | null)?.insurance, want);
+  if (p.error) return;
+  const auth = String(fd.get('insurance_auth') || '').trim().slice(0, 40) || null;
+  await supabase.from('appointments').update({ payer: p.payer, insurance: p.insurance, insurance_auth: p.payer === 'convenio' ? auth : null }).eq('id', id).eq('clinic_id', clinic.id);
+  revalidatePath('/app/agenda'); revalidatePath('/app/financeiro');
 }
 
 export async function markChargePaid(fd: FormData) {

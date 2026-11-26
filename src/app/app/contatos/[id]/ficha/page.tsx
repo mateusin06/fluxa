@@ -52,8 +52,8 @@ export default async function FichaPage({ params }: { params: Promise<{ id: stri
           <p>{alerts.join(' · ')}</p>
         </div>
       )}
-      <div className="grid gap-6 lg:grid-cols-[1fr_420px]">
-        <div className="space-y-6">
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_420px]">
+        <div className="min-w-0 space-y-6">
           <AnamneseForm contactId={id} data={data} disabled={!writable} />
           <section className="card space-y-3" aria-labelledby="fotos">
             <h2 id="fotos" className="font-semibold">Fotos</h2>

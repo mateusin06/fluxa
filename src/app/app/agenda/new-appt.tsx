@@ -11,13 +11,14 @@ const norm = (s: string) => s.trim().toLocaleLowerCase('pt-BR');
 
 export interface PlanItem { id: string; description: string; procName: string | null; duration: number; done: number; qty: number }
 
-export function NewAppointment({ pros, procs, preset, presetStart, presetPro, defaultMin, plan }: {
-  pros: Opt[]; procs: ProcOpt[]; preset?: Opt | null; presetStart?: string; presetPro?: string; defaultMin: number; plan?: PlanItem | null;
+export function NewAppointment({ pros, procs, preset, presetStart, presetPro, defaultMin, plan, convenio }: {
+  pros: Opt[]; procs: ProcOpt[]; preset?: Opt | null; presetStart?: string; presetPro?: string; defaultMin: number; plan?: PlanItem | null; convenio?: boolean;
 }) {
   const [s, act] = useActionState(createAppointment, null);
   const [proc, setProc] = useState(plan ? plan.procName || plan.description : '');
   const [dur, setDur] = useState(plan ? plan.duration : defaultMin);
   const [livre, setLivre] = useState(false);
+  const [payer, setPayer] = useState('');
   const known = procs.find((p) => norm(p.name) === norm(proc));
   const custom = !plan && !!proc.trim() && !known;
 
@@ -54,6 +55,19 @@ export function NewAppointment({ pros, procs, preset, presetStart, presetPro, de
         ? <div><label className="label" htmlFor="ap-price">Preço deste procedimento (R$)</label><input id="ap-price" name="price" inputMode="decimal" placeholder="0,00" className="field" /></div>
         : <div><label className="label" htmlFor="ap-n">Observação</label><input id="ap-n" name="notes" className="field" /></div>}
       {custom && <div className="sm:col-span-3"><label className="label" htmlFor="ap-n2">Observação</label><input id="ap-n2" name="notes" className="field" /></div>}
+      {convenio && !plan && !livre && (
+        <>
+          <div>
+            <label className="label" htmlFor="ap-pay">Pagamento</label>
+            <select id="ap-pay" name="payer" value={payer} onChange={(e) => setPayer(e.target.value)} className="field">
+              <option value="">Automático (convênio do paciente, se tiver)</option>
+              <option value="particular">Particular</option>
+              <option value="convenio">Convênio do paciente</option>
+            </select>
+          </div>
+          {payer !== 'particular' && <div><label className="label" htmlFor="ap-guia">Nº da guia / autorização (convênio)</label><input id="ap-guia" name="insurance_auth" maxLength={40} className="field" placeholder="Opcional" /></div>}
+        </>
+      )}
       <div className="space-y-1 text-sm sm:col-span-3">
         <label className="flex items-center gap-2"><input type="checkbox" name="encaixe" /> Encaixe: agendar mesmo se o horário estiver ocupado</label>
         {!plan && <label className="flex items-center gap-2"><input type="checkbox" name="livre" checked={livre} onChange={(e) => setLivre(e.target.checked)} /> Horário livre extra (sem paciente, fora do horário de atendimento): as automações oferecem a quem pedir pelo WhatsApp</label>}

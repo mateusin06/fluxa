@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getContext } from '@/lib/clinic';
 import { PageHeader, Badge } from '@/components/bits';
+import { acceptedInsurance } from '@/lib/insurance';
 import { fmtDate, fmtDateTime, fmtPhone, waLink, firstName, money } from '@/lib/utils';
 import type { Contact } from '@/lib/types';
 import { completeTask, deleteContact } from '../../crm-actions';
@@ -34,7 +35,7 @@ export default async function ContactPage({ params }: { params: Promise<{ id: st
   const contact = c as Contact;
   return (
     <>
-      <PageHeader title={contact.name} desc={[fmtPhone(contact.phone), contact.email].filter(Boolean).join(' · ')}>
+      <PageHeader title={contact.name} desc={[fmtPhone(contact.phone), contact.email, contact.insurance ? `Convênio: ${contact.insurance}${contact.insurance_card ? ` (carteirinha ${contact.insurance_card})` : ''}${clinic.accepts_insurance && !acceptedInsurance(clinic, contact.insurance) ? ' · a clínica não atende este convênio' : ''}` : null].filter(Boolean).join(' · ')}>
         {contact.phone && <a className="btn btn-sec" target="_blank" rel="noreferrer" href={waLink(contact.phone, `Oi, ${firstName(contact.name)}!`)}>WhatsApp</a>}
         <Link className="btn btn-sec" href={`/app/agenda?contato=${contact.id}`}>Agendar</Link>
         {writable && <Link className="btn btn-sec" href={`/app/orcamentos?contato=${contact.id}`}>Novo orçamento</Link>}
@@ -83,7 +84,7 @@ export default async function ContactPage({ params }: { params: Promise<{ id: st
               </ul>
             </section>
           )}
-          <EditContact c={contact} readOnly={!writable} />
+          <EditContact c={contact} readOnly={!writable} insurances={clinic.insurances || []} accepts={!!clinic.accepts_insurance} />
         </div>
         <div className="space-y-6">
           {writable && <AiFollowup contactId={contact.id} phone={contact.phone} />}

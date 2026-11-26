@@ -4,7 +4,7 @@ import { signMany } from '@/lib/signed';
 import { fmtDateTime } from '@/lib/utils';
 import { removeMember, revokeApiKey, setClinicalAccess } from './actions';
 import { HoursForm } from './hours';
-import { ApiKeyForm, AutomationSettings, BrandForm, ClinicForm, InviteForm, ProcedureRow, ProfessionalForm, ProfessionalProcedures, StageRow } from './forms';
+import { ApiKeyForm, AutomationSettings, InsuranceSettings, BrandForm, ClinicForm, InviteForm, ProcedureRow, ProfessionalForm, ProfessionalProcedures, StageRow } from './forms';
 
 export const metadata = { title: 'Clínica e equipe' };
 const ROLE = { owner: 'Dono', admin: 'Administrador', staff: 'Equipe' } as const;
@@ -64,6 +64,8 @@ export default async function Page() {
 
         <HoursForm hours={clinicHours} disabled={!isAdmin || ro}
           procs={activeProcs.map((p) => ({ id: p.id, name: p.name, duration_min: p.duration_min }))} cfg={cfg} />
+
+        {isAdmin && <InsuranceSettings accepts={!!clinic.accepts_insurance} list={clinic.insurances || []} disabled={ro} />}
 
         {isAdmin && <AutomationSettings url={clinic.waitlist_webhook_url} template={clinic.reminder_template} disabled={ro} />}
 

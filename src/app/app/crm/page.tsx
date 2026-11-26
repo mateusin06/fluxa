@@ -9,7 +9,7 @@ export default async function CrmPage() {
   const { supabase, clinic, writable } = await getContext();
   const [{ data: stages }, { data: deals }] = await Promise.all([
     supabase.from('stages').select('id, name, kind, color, position').eq('clinic_id', clinic.id).order('position'),
-    supabase.from('deals').select('id, title, value, stage_id, position, contact_id, updated_at, contact:contacts(name, phone)')
+    supabase.from('deals').select('id, title, value, stage_id, position, contact_id, updated_at, contact:contacts(name, phone, insurance)')
       .eq('clinic_id', clinic.id).order('position').limit(2000),
   ]);
   const list: KDeal[] = (deals || []).map((d) => ({

@@ -6,6 +6,7 @@ import { fmtDate, money } from '@/lib/utils';
 import { categoryLabel, EXPENSE_CATEGORIES, METHODS, methodLabel, monthBounds } from '@/lib/payments';
 import { monthCommissions } from '@/lib/commission';
 import { ChargeForm, ExpenseForm } from './form';
+import { MobileCollapse } from '@/components/mobile-collapse';
 import { commissionToExpense, setChargeStatus, setExpenseStatus } from './actions';
 
 export const metadata = { title: 'Financeiro' };
@@ -13,7 +14,7 @@ type Aba = 'receber' | 'pagas' | 'despesas' | 'resultado' | 'comissoes';
 const sum = (a: { amount: number | string }[] | null | undefined) => (a || []).reduce((x, c) => x + Number(c.amount), 0);
 const nm = (x: unknown) => (x as { name: string } | null)?.name || '';
 
-export default async function Page({ searchParams }: { searchParams: Promise<{ aba?: string; st?: string; mes?: string }> }) {
+export default async function Page({ searchParams }: { searchParams: Promise<{ aba?: string; st?: string; mes?: string; pagador?: string }> }) {
   const { supabase, clinic, writable, isAdmin } = await getContext();
   const sp = await searchParams;
   const abas: [Aba, string][] = [['receber', 'A receber'], ['pagas', 'Recebidas'], ...(isAdmin ? [['despesas', 'Despesas'], ['resultado', 'Resultado do mês'], ['comissoes', 'Comissões']] as [Aba, string][] : [])];
@@ -29,20 +30,32 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ a
     </div>
   );
 
-  const { data: open } = await supabase.from('charges').select('amount, due_date').eq('clinic_id', clinic.id).eq('status', 'aberto').limit(10000);
+  const { data: open } = await supabase.from('charges').select('amount, due_date, payer').eq('clinic_id', clinic.id).eq('status', 'aberto').limit(10000);
+  const pagador = sp.pagador === 'convenio' || sp.pagador === 'paciente' ? sp.pagador : '';
   const late = (open || []).filter((c) => c.due_date < today);
 
   let body: React.ReactNode = null;
 
   if (aba === 'receber') {
-    const { data: list } = await supabase.from('charges').select('id, description, amount, due_date, status, payment_link, meta, contact_id, contact:contacts(name)').eq('clinic_id', clinic.id).eq('status', 'aberto').order('due_date').limit(500);
+    let lq = supabase.from('charges').select('id, description, amount, due_date, status, payment_link, meta, contact_id, payer, insurance, contact:contacts(name)').eq('clinic_id', clinic.id).eq('status', 'aberto');
+    if (pagador) lq = lq.eq('payer', pagador);
+    const { data: list } = await lq.order('due_date').limit(500);
+    const conv = (open || []).filter((c) => c.payer === 'convenio');
     body = (
       <>
         <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-3">
           <Stat label="Em aberto" value={money(sum(open))} />
           <Stat label="Vencido" value={money(sum(late))} hint={`${late.length} cobrança(s)`} />
+          {(clinic.accepts_insurance || conv.length > 0) && <Stat label="De convênios" value={money(sum(conv))} hint={`${conv.length} guia(s) a receber das operadoras`} />}
         </div>
-        {writable && <div className="mb-6"><ChargeForm /></div>}
+        {(clinic.accepts_insurance || conv.length > 0) && (
+          <nav aria-label="Quem paga" className="mb-4 flex flex-wrap gap-1 text-sm">
+            {([['', 'Todas'], ['paciente', 'Pacientes'], ['convenio', 'Convênios']] as const).map(([k, l]) => (
+              <Link key={k} href={`/app/financeiro?aba=receber${k ? `&pagador=${k}` : ''}`} className={`rounded-full border px-3 py-1 ${pagador === k ? 'border-ink bg-ink text-white' : 'border-slate-200 bg-white'}`}>{l}</Link>
+            ))}
+          </nav>
+        )}
+        {writable && <div className="mb-6"><MobileCollapse title="Nova cobrança"><ChargeForm /></MobileCollapse></div>}
         {list?.length ? (
           <div className="card overflow-x-auto p-0">
             <table className="tbl">
@@ -51,7 +64,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ a
                 {list.map((c) => (
                   <tr key={c.id}>
                     <td><Link className="underline" href={`/app/contatos/${c.contact_id}`}>{nm(c.contact)}</Link></td>
-                    <td>{c.description}{(c.meta as { forma?: string } | null)?.forma === 'balcao' && <> <Badge tone="amber">balcão</Badge></>}{c.payment_link && <> · <a className="underline" href={c.payment_link} target="_blank" rel="noreferrer">link</a></>}</td>
+                    <td>{c.description}{c.payer === 'convenio' && <> <Badge tone="violet">convênio {c.insurance}</Badge></>}{(c.meta as { forma?: string } | null)?.forma === 'balcao' && <> <Badge tone="amber">balcão</Badge></>}{c.payment_link && <> · <a className="underline" href={c.payment_link} target="_blank" rel="noreferrer">link</a></>}</td>
                     <td>{money(c.amount)}</td>
                     <td>{fmtDate(c.due_date + 'T12:00:00Z')} {c.due_date < today && <Badge tone="red">vencida</Badge>}</td>
                     <td className="text-xs text-slate-500">{(c.meta as { etapa_cobranca?: string })?.etapa_cobranca || '—'}</td>
@@ -74,6 +87,8 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ a
   if (aba === 'pagas') {
     const { data: list } = await supabase.from('charges').select('id, description, amount, paid_at, payment_method, installments, contact_id, contact:contacts(name)')
       .eq('clinic_id', clinic.id).eq('status', 'pago').gte('paid_at', M.start).lt('paid_at', M.end).order('paid_at', { ascending: false }).limit(2000);
+    const { data: nfs } = isAdmin && list?.length ? await supabase.from('nfse').select('id, charge_id, numero').eq('clinic_id', clinic.id).not('charge_id', 'is', null).in('status', ['autorizada', 'processando']).limit(5000) : { data: [] };
+    const nfOf = new Map((nfs || []).map((n) => [n.charge_id as string, n]));
     const byMethod = [...METHODS, ['', 'Sem forma informada'] as const].map(([k, l]) => ({ k, l, v: sum((list || []).filter((c) => (c.payment_method || '') === k)) })).filter((x) => x.v > 0);
     body = (
       <>
@@ -94,7 +109,8 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ a
                     <td>{c.description}</td>
                     <td>{money(c.amount)}</td>
                     <td>{methodLabel(c.payment_method) || '—'}{c.payment_method === 'credito' && c.installments > 1 ? ` ${c.installments}x` : ''}</td>
-                    <td><a className="text-sm underline" href={`/app/financeiro/recibo/${c.id}`} target="_blank" rel="noreferrer">Recibo (PDF)</a></td>
+                    <td><span className="flex flex-wrap gap-x-3 gap-y-1"><a className="text-sm underline" href={`/app/financeiro/recibo/${c.id}`} target="_blank" rel="noreferrer">Recibo (PDF)</a>
+                      {isAdmin && (nfOf.get(c.id) ? <Link className="text-sm underline" href={`/app/notas/${nfOf.get(c.id)!.id}`}>NF {nfOf.get(c.id)!.numero || 'emitida'}</Link> : <Link className="text-sm underline" href={`/app/notas?cobranca=${c.id}`}>Emitir NF</Link>)}</span></td>
                   </tr>
                 ))}
               </tbody>
@@ -119,7 +135,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ a
           <Stat label="Despesas do mês" value={money(sum(list))} />
           <Stat label="A pagar" value={money(sum(aberto))} hint={`${aberto.filter((e) => e.due_date < today).length} vencida(s)`} />
         </div>
-        {writable && <div className="mb-6"><ExpenseForm pros={pros || []} /></div>}
+        {writable && <div className="mb-6"><MobileCollapse title="Nova despesa"><ExpenseForm pros={pros || []} /></MobileCollapse></div>}
         {list?.length ? (
           <div className="card overflow-x-auto p-0">
             <table className="tbl">

@@ -5,10 +5,23 @@ import { z } from 'zod';
 import { getContext } from '@/lib/clinic';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { localToIso, normPhone } from '@/lib/utils';
+import { cleanInsurance } from '@/lib/insurance';
 
 type S = { error?: string; ok?: string } | null;
 const uuid = z.string().uuid();
 const blank = (v: FormDataEntryValue | null) => { const s = String(v ?? '').trim(); return s || null; };
+/** Convênio do formulário (só mexe se o campo veio no formulário). Vazio ou "particular" = sem convênio. */
+function insuranceFields(fd: FormData) {
+  if (!fd.has('insurance')) return {};
+  const insurance = cleanInsurance(String(fd.get('insurance') || ''));
+  const valid = blank(fd.get('insurance_valid'));
+  return {
+    insurance,
+    insurance_card: insurance ? (blank(fd.get('insurance_card')) || '').slice(0, 40) || null : null,
+    insurance_plan: insurance ? (blank(fd.get('insurance_plan')) || '').slice(0, 80) || null : null,
+    insurance_valid: insurance && valid && /^\d{4}-\d{2}-\d{2}$/.test(valid) ? valid : null,
+  };
+}
 
 export async function createContact(_: S, fd: FormData): Promise<S> {
   const { supabase, clinic, user } = await getContext();
@@ -24,6 +37,7 @@ export async function createContact(_: S, fd: FormData): Promise<S> {
   const { data: c, error } = await supabase.from('contacts').insert({
     clinic_id: clinic.id, name, phone, email: blank(fd.get('email')), source: blank(fd.get('source')) || 'manual',
     birth_date: blank(fd.get('birth_date')), notes: blank(fd.get('notes')), created_by: user.id,
+    ...insuranceFields(fd),
   }).select('id').single();
   if (error) return { error: error.message };
   if (fd.get('criar_oportunidade') === 'on') {
@@ -51,6 +65,7 @@ export async function updateContact(_: S, fd: FormData): Promise<S> {
     name: blank(fd.get('name')) || 'Sem nome', phone, email: blank(fd.get('email')), birth_date: blank(fd.get('birth_date')),
     source: blank(fd.get('source')) || 'manual', notes: blank(fd.get('notes')), tags, consent_whatsapp: fd.get('consent_whatsapp') === 'on',
     ...(fd.has('document') ? { document: (blank(fd.get('document')) || '').replace(/[^\d.\-/]/g, '').slice(0, 20) || null } : {}),
+    ...insuranceFields(fd),
   }).eq('id', id).eq('clinic_id', clinic.id);
   if (error) return { error: error.message };
   revalidatePath(`/app/contatos/${id}`);

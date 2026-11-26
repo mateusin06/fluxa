@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
-import { BarChart3, CalendarDays, FileText, Wallet, CreditCard, KanbanSquare, Megaphone, Menu, PenTool, Settings, Shield, Sparkles, Users, Workflow, X } from 'lucide-react';
+import { BarChart3, CalendarDays, FileText, Receipt, Wallet, CreditCard, KanbanSquare, Megaphone, Menu, PenTool, Settings, Shield, Sparkles, Users, Workflow, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Logo } from '@/components/logo';
 
@@ -13,6 +13,7 @@ const ITEMS = [
   { href: '/app/agenda', label: 'Agenda', icon: CalendarDays },
   { href: '/app/orcamentos', label: 'Orçamentos', icon: FileText },
   { href: '/app/financeiro', label: 'Financeiro', icon: Wallet },
+  { href: '/app/notas', label: 'Notas fiscais', icon: Receipt },
   { href: '/app/criativos', label: 'Criativos com IA', icon: PenTool },
   { href: '/app/textos', label: 'Textos com IA', icon: Sparkles },
   { href: '/app/campanhas', label: 'Campanhas', icon: Megaphone },
@@ -54,13 +55,18 @@ export function Nav({ clinicName, isPlatformAdmin, switcher }: { clinicName: str
   );
   return (
     <>
-      <div className="flex items-center justify-between bg-ink px-4 py-3 lg:hidden">
+      <div className="sticky top-0 z-30 flex items-center justify-between bg-ink px-4 py-3 lg:hidden">
         <Logo dark size={22} />
         <button type="button" aria-label={open ? 'Fechar menu' : 'Abrir menu'} aria-expanded={open} onClick={() => setOpen(!open)} className="rounded-lg p-2 text-white">
           {open ? <X size={22} /> : <Menu size={22} />}
         </button>
       </div>
-      {open && <div className="fixed inset-0 z-40 bg-ink lg:hidden">{body}</div>}
+      {open && (
+        <div className="fixed inset-0 z-40 overflow-y-auto bg-ink lg:hidden" role="dialog" aria-modal="true" aria-label="Menu">
+          <button type="button" aria-label="Fechar menu" onClick={() => setOpen(false)} className="absolute right-3 top-3 rounded-lg p-2 text-white"><X size={22} /></button>
+          {body}
+        </div>
+      )}
       <aside className="sticky top-0 hidden h-screen w-64 shrink-0 bg-ink lg:block">{body}</aside>
     </>
   );

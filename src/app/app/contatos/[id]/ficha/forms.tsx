@@ -36,8 +36,8 @@ export function NoteForm({ contactId, pros, appts }: { contactId: string; pros: 
     <form key={s?.ok ? Date.now() : 'f'} action={act} className="space-y-2">
       <input type="hidden" name="contact_id" value={contactId} />
       <div className="flex flex-wrap gap-2">
-        {pros.length > 0 && <><label className="sr-only" htmlFor="nt-p">Profissional</label><select id="nt-p" name="professional_id" className="field w-56"><option value="">Profissional</option>{pros.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></>}
-        {appts.length > 0 && <><label className="sr-only" htmlFor="nt-a">Consulta</label><select id="nt-a" name="appointment_id" className="field w-64"><option value="">Consulta (opcional)</option>{appts.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}</select></>}
+        {pros.length > 0 && <><label className="sr-only" htmlFor="nt-p">Profissional</label><select id="nt-p" name="professional_id" className="field w-full sm:w-56"><option value="">Profissional</option>{pros.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></>}
+        {appts.length > 0 && <><label className="sr-only" htmlFor="nt-a">Consulta</label><select id="nt-a" name="appointment_id" className="field w-full sm:w-64"><option value="">Consulta (opcional)</option>{appts.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}</select></>}
       </div>
       <label className="sr-only" htmlFor="nt-b">Evolução</label>
       <textarea id="nt-b" name="body" rows={4} required maxLength={5000} className="field" placeholder="O que foi feito, materiais e produtos usados, como o paciente reagiu, orientações e próximo passo." />
@@ -75,8 +75,8 @@ export function PhotoUpload({ clinicId, contactId }: { clinicId: string; contact
   const today = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
   return (
     <form onSubmit={onSubmit} className="flex flex-wrap items-end gap-2">
-      <div><label className="label" htmlFor="ph-f">Fotos (antes, durante, depois)</label><input id="ph-f" name="photos" type="file" multiple accept="image/png,image/jpeg,image/webp" className="text-sm" /></div>
-      <div><label className="label" htmlFor="ph-c">Legenda</label><input id="ph-c" name="caption" maxLength={200} placeholder="Antes · arcada superior" className="field w-56" /></div>
+      <div><label className="label" htmlFor="ph-f">Fotos (antes, durante, depois)</label><input id="ph-f" name="photos" type="file" multiple accept="image/png,image/jpeg,image/webp" className="block w-full max-w-full text-sm" /></div>
+      <div><label className="label" htmlFor="ph-c">Legenda</label><input id="ph-c" name="caption" maxLength={200} placeholder="Antes · arcada superior" className="field w-full sm:w-56" /></div>
       <div><label className="label" htmlFor="ph-d">Data</label><input id="ph-d" name="taken_at" type="date" defaultValue={today} className="field" /></div>
       <button type="submit" disabled={busy} className="btn btn-sec">{busy ? 'Enviando...' : 'Enviar fotos'}</button>
       <FormMsg state={msg} />

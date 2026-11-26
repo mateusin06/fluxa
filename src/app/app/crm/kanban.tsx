@@ -5,7 +5,7 @@ import { MessageCircle } from 'lucide-react';
 import { money, waLink, firstName } from '@/lib/utils';
 import { moveDeal } from '../crm-actions';
 
-export interface KDeal { id: string; title: string; value: number; stage_id: string; position: number; contact_id: string; updated_at: string; contact: { name: string; phone: string | null } }
+export interface KDeal { id: string; title: string; value: number; stage_id: string; position: number; contact_id: string; updated_at: string; contact: { name: string; phone: string | null; insurance?: string | null } }
 interface KStage { id: string; name: string; kind: string; color: string }
 
 export function Kanban({ stages, deals, readOnly }: { stages: KStage[]; deals: KDeal[]; readOnly: boolean }) {
@@ -45,13 +45,13 @@ export function Kanban({ stages, deals, readOnly }: { stages: KStage[]; deals: K
   return (
     <>
       {err && <p role="alert" className="mb-3 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{err}</p>}
-      <div className="flex gap-4 overflow-x-auto pb-4">
+      <div className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-4 sm:mx-0 sm:snap-none sm:gap-4 sm:px-0">
         {stages.map((s) => {
           const col = items.filter((d) => d.stage_id === s.id).sort((a, b) => a.position - b.position);
           const total = col.reduce((a, d) => a + d.value, 0);
           return (
             <section key={s.id} aria-label={s.name} onDragOver={(e) => e.preventDefault()} onDrop={() => drop(s.id)}
-              className="flex w-72 shrink-0 flex-col rounded-xl bg-slate-100 p-3">
+              className="flex w-[84vw] max-w-[20rem] shrink-0 snap-start flex-col rounded-xl bg-slate-100 p-3 sm:w-72">
               <header className="mb-3 flex items-center justify-between">
                 <h2 className="flex items-center gap-2 text-sm font-semibold"><span className="h-2.5 w-2.5 rounded-full" style={{ background: s.color }} />{s.name} <span className="text-slate-500">{col.length}</span></h2>
                 <span className="text-xs text-slate-600">{money(total)}</span>
@@ -61,6 +61,7 @@ export function Kanban({ stages, deals, readOnly }: { stages: KStage[]; deals: K
                   <article key={d.id} draggable={!readOnly} onDragStart={() => setDrag(d.id)}
                     className="cursor-grab rounded-lg border border-slate-200 bg-white p-3 shadow-sm active:cursor-grabbing">
                     <Link href={`/app/contatos/${d.contact_id}`} className="block font-semibold text-slate-900 hover:underline">{d.contact.name}</Link>
+                    {d.contact.insurance && <p className="mt-0.5 inline-block rounded bg-violet-100 px-1.5 text-[11px] font-semibold text-violet-800">Convênio {d.contact.insurance}</p>}
                     <p className="text-sm text-slate-600">{d.title}</p>
                     <div className="mt-2 flex items-center justify-between">
                       <span className="text-sm font-semibold">{money(d.value)}</span>

@@ -3,6 +3,7 @@ import { getContext } from '@/lib/clinic';
 import { PageHeader, Badge, Empty, Stat } from '@/components/bits';
 import { fmtDate, money } from '@/lib/utils';
 import { NewQuote } from './editor';
+import { MobileCollapse } from '@/components/mobile-collapse';
 
 export const metadata = { title: 'Orçamentos' };
 const ST_TONE = { rascunho: 'slate', enviado: 'amber', aprovado: 'green', recusado: 'red' } as const;
@@ -35,7 +36,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ s
         <Stat label="Aprovado (90 dias)" value={money(aprov.reduce((a, x) => a + totalOf(x as never), 0))} hint={`${aprov.length} orçamento(s)`} />
         <Stat label="Taxa de aprovação" value={decididos.length ? `${Math.round((aprov.length / decididos.length) * 100)}%` : '—'} hint="Aprovados ÷ (aprovados + recusados), 90 dias" />
       </div>
-      {writable && <div className="mb-6"><NewQuote pros={pros || []} preset={preset.data} /></div>}
+      {writable && <div className="mb-6"><MobileCollapse title="Novo orçamento" forceOpen={!!preset.data}><NewQuote pros={pros || []} preset={preset.data} /></MobileCollapse></div>}
       <nav aria-label="Filtrar por situação" className="mb-3 flex flex-wrap gap-1 text-sm">
         {STS.map((x) => <Link key={x} href={`/app/orcamentos${x === 'todos' ? '' : `?st=${x}`}`} aria-current={st === x ? 'page' : undefined} className={`rounded-full border px-3 py-1 capitalize ${st === x ? 'border-ink bg-ink text-white' : 'border-slate-200 bg-white'}`}>{x}</Link>)}
       </nav>

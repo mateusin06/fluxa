@@ -40,6 +40,32 @@ async function call(model: string, body: unknown): Promise<{ parts: Part[]; tin:
   throw new Error(`Todas as chaves do Gemini falharam ou estão no limite. Último erro: ${lastErr}`);
 }
 
+class NoImage extends Error {}
+/**
+ * Modelos em ordem de preferência. O primeiro é o da variável de ambiente (se houver);
+ * se ele não existir para a chave (modelos antigos são desligados para chaves novas), tenta o próximo.
+ * Imagem: o gemini-3.8-flash só devolve texto, então a arte usa um modelo de imagem da família 3.x.
+ */
+const uniq = (l: string[]) => [...new Set(l.filter(Boolean))];
+const TEXT_MODELS = () => uniq([env.geminiModel, 'gemini-3.8-flash']);
+const IMAGE_MODELS = () => uniq([env.geminiImageModel, 'gemini-3.1-flash-image', 'gemini-nano-banana-2.1', 'gemini-3-pro-image']);
+
+async function withFallback<T>(models: string[], run: (model: string) => Promise<T>): Promise<T> {
+  let last: unknown;
+  for (const m of models) {
+    try {
+      return await run(m);
+    } catch (e) {
+      last = e;
+      if (e instanceof QuotaError || e instanceof NoImage) throw e;
+      const msg = e instanceof Error ? e.message : String(e);
+      // bloqueio de segurança é do pedido, não do modelo: não adianta trocar
+      if (/filtro de segurança/.test(msg)) throw e;
+    }
+  }
+  throw last instanceof Error ? last : new Error(String(last));
+}
+
 async function checkQuota(clinicId: string, plan: Plan, kind: 'text' | 'image') {
   const admin = createAdminClient();
   const { data, error } = await admin.rpc('ai_usage_this_month', { cid: clinicId, k: kind });
@@ -62,11 +88,11 @@ export interface AiCtx { clinicId: string; plan: Plan; userId: string; feature: 
 /** Gera JSON validado pelo schema do Gemini. */
 export async function generateJson<T>(ctx: AiCtx, system: string, prompt: string, schema: object, temperature = 0.9): Promise<T> {
   await checkQuota(ctx.clinicId, ctx.plan, 'text');
-  const { parts, tin, tout } = await call(env.geminiModel, {
+  const { parts, tin, tout } = await withFallback(TEXT_MODELS(), (m) => call(m, {
     systemInstruction: { parts: [{ text: system }] },
     contents: [{ role: 'user', parts: [{ text: prompt }] }],
     generationConfig: { temperature, responseMimeType: 'application/json', responseSchema: schema },
-  });
+  }));
   await logUsage(ctx.clinicId, 'text', ctx.feature, ctx.userId, tin, tout);
   const text = parts.map((p) => p.text || '').join('');
   try {
@@ -79,9 +105,13 @@ export async function generateJson<T>(ctx: AiCtx, system: string, prompt: string
 /** Gera uma imagem (PNG em base64). Usada só para fundos e cenários, nunca para rostos de pessoas reais. */
 export async function generateImage(ctx: AiCtx, prompt: string, aspectRatio: '4:5' | '9:16' | '1:1'): Promise<{ mime: string; data: string }> {
   await checkQuota(ctx.clinicId, ctx.plan, 'image');
-  const { parts, tin, tout } = await call(env.geminiImageModel, {
-    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    generationConfig: { responseModalities: ['IMAGE'], imageConfig: { aspectRatio } },
+  const { parts, tin, tout } = await withFallback(IMAGE_MODELS(), async (m) => {
+    const r = await call(m, {
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: { responseModalities: ['TEXT', 'IMAGE'], imageConfig: { aspectRatio } },
+    });
+    if (!r.parts.some((p) => p.inlineData?.data)) throw new NoImage('A IA não devolveu imagem. Reformule a descrição.');
+    return r;
   });
   const img = parts.find((p) => p.inlineData?.data);
   if (!img?.inlineData) throw new Error('A IA não devolveu imagem. Reformule a descrição.');
