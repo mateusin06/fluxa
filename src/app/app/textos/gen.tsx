@@ -1,4 +1,5 @@
 'use client';
+import { aiJson } from '@/lib/ai-fetch';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
@@ -13,7 +14,7 @@ export function CopyGen() {
     const fd = new FormData(e.currentTarget);
     setBusy(true); setErr('');
     const r = await fetch('/api/ai/copies', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: fd.get('kind'), topic: fd.get('topic'), tone: fd.get('tone'), qtd: Number(fd.get('qtd')) }) });
-    const j = await r.json().catch(() => ({}));
+    const j = await aiJson(r);
     setBusy(false);
     if (!r.ok) setErr(j.error || 'Falhou'); else router.refresh();
   }

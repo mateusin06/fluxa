@@ -1,4 +1,5 @@
 'use client';
+import { aiJson } from '@/lib/ai-fetch';
 import { useActionState, useState } from 'react';
 import { FormMsg, Submit } from '@/components/ui';
 import { addActivity, createDeal, updateContact, updateDeal } from '../../crm-actions';
@@ -88,7 +89,7 @@ export function AiFollowup({ contactId, phone }: { contactId: string; phone: str
     setBusy(true); setErr('');
     try {
       const r = await fetch('/api/ai/followup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contactId, goal }) });
-      const j = await r.json();
+      const j = await aiJson(r);
       if (!r.ok) throw new Error(j.error || 'Falhou');
       setOut(j);
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }

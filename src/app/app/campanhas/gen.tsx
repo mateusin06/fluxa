@@ -1,4 +1,5 @@
 'use client';
+import { aiJson } from '@/lib/ai-fetch';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
@@ -11,7 +12,7 @@ export function CampaignGen() {
     const fd = new FormData(e.currentTarget);
     setBusy(true); setErr('');
     const r = await fetch('/api/ai/campaign', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nome: fd.get('nome'), objetivo: fd.get('objetivo'), orcamento: Number(String(fd.get('orcamento')).replace(',', '.')), raio: fd.get('raio'), detalhes: fd.get('detalhes') }) });
-    const j = await r.json().catch(() => ({}));
+    const j = await aiJson(r);
     setBusy(false);
     if (!r.ok) setErr(j.error || 'Falhou'); else router.refresh();
   }

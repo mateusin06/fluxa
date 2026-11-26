@@ -1,4 +1,5 @@
 'use client';
+import { aiJson } from '@/lib/ai-fetch';
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { toPng } from 'html-to-image';
 import { createClient } from '@/lib/supabase/client';
@@ -97,7 +98,7 @@ export function Studio(p: Props) {
     setBusy('A IA está criando o fundo...');
     try {
       const r = await fetch('/api/ai/image', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ creativeId: cur.id, descricao: d }) });
-      const j = await r.json();
+      const j = await aiJson(r);
       if (!r.ok) throw new Error(j.error);
       patch((c) => ({ ...c, bg: j.url, template: 'tipografico' }));
       setMsg('Fundo criado. Ele aparece no modelo "Só texto".');
