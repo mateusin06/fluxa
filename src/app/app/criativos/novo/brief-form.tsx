@@ -44,7 +44,7 @@ export function BriefForm({ clinicId, pros, procs }: { clinicId: string; pros: P
         offer: String(fd.get('offer') || ''), instructions: String(fd.get('instructions') || ''), formats, photo_paths: paths,
       });
       if (r.error || !r.id) throw new Error(r.error || 'Falhou');
-      setStep('A IA está criando as artes e os textos (até 1 minuto)...');
+      setStep('A IA está escrevendo as artes e os textos (até 1 minuto). Depois, os fundos são criados no estúdio...');
       const g = await fetch('/api/ai/creatives', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ briefId: r.id, variacoes: Number(fd.get('variacoes') || 3) }) });
       const j = await aiJson(g);
       if (!g.ok) { router.push(`/app/criativos/${r.id}?erro=${encodeURIComponent(j.error || 'Falha na IA')}`); return; }

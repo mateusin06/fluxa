@@ -6,6 +6,8 @@ import { monthlyCents } from '@/lib/billing';
 import { Checkout, CancelButton } from './checkout';
 
 export const metadata = { title: 'Assinatura' };
+/** Mesmo critério do banco (date_trunc('month', now()) em UTC). */
+const monthStart = () => { const d = new Date(); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString(); };
 const ST = { trial: ['Teste grátis', 'blue'], active: ['Ativa', 'green'], past_due: ['Pagamento pendente', 'amber'], blocked: ['Bloqueada', 'red'], canceled: ['Cancelada', 'slate'] } as const;
 
 export default async function Page() {
@@ -13,11 +15,13 @@ export default async function Page() {
   const [{ data: sub }, { data: auto }, { data: usage }] = await Promise.all([
     supabase.from('subscriptions').select('*').eq('clinic_id', clinic.id).maybeSingle(),
     supabase.from('automation_requests').select('id').eq('clinic_id', clinic.id).eq('status', 'ativo').limit(1),
-    supabase.from('ai_usage').select('kind').eq('clinic_id', clinic.id).gte('created_at', new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()),
+    supabase.from('ai_usage').select('kind, tokens_out').eq('clinic_id', clinic.id).gte('created_at', monthStart()).limit(10_000),
   ]);
   const total = monthlyCents(clinic.plan, !!auto?.length);
   const lim = LIMITS[clinic.plan];
-  const used = { text: (usage || []).filter((u) => u.kind === 'text').length, image: (usage || []).filter((u) => u.kind === 'image').length };
+  const textos = (usage || []).filter((u) => u.kind === 'text');
+  const used = { text: textos.length, image: (usage || []).filter((u) => u.kind === 'image').length, tokens: textos.reduce((s, u) => s + (Number(u.tokens_out) || 0), 0) };
+  const pctTokens = Math.min(100, Math.round((used.tokens / lim.tokensTextoIA) * 100));
   const hasSub = sub?.subscription_id && sub.status !== 'canceled';
   const [label, tone] = ST[clinic.status];
 
@@ -32,7 +36,7 @@ export default async function Page() {
             {sub?.current_period_end && <p className="text-sm">Período pago até {fmtDate(sub.current_period_end)}.</p>}
             {sub?.pending_payment_url && <p className="text-sm"><a className="font-semibold underline" href={sub.pending_payment_url} target="_blank" rel="noreferrer">Abrir boleto em aberto</a></p>}
             {sub?.status === 'canceled' && <p className="text-sm text-slate-600">Assinatura cancelada. Você pode assinar de novo a qualquer momento.</p>}
-            <p className="text-sm text-slate-600">Uso de IA neste mês: {used.text}/{lim.textosIA} textos · {used.image}/{lim.imagensIA} imagens.</p>
+            <p className="text-sm text-slate-600">Uso de IA neste mês: {used.text}/{lim.textosIA} textos · {used.image}/{lim.imagensIA} imagens · {pctTokens}% da franquia de texto da IA.</p>
             {hasSub && role === 'owner' && <div className="pt-2"><CancelButton /></div>}
           </section>
           {isAdmin && !hasSub && <Checkout publicKey={process.env.NEXT_PUBLIC_PAGARME_PUBLIC_KEY || ''} email={user.email || ''} total={brl(total)} />}

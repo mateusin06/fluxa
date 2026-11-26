@@ -47,6 +47,42 @@ export function Studio(p: Props) {
       setData((d) => ({ ...d, ...Object.fromEntries(pairs) })));
   }, [p.photos, p.logo, items, data]);
 
+  // Fundo com IA automático: um por variação (grupo), gerado ao abrir o estúdio. Até 3 ao mesmo tempo.
+  const [fundos, setFundos] = useState<{ total: number; feitos: number; erro: string }>({ total: 0, feitos: 0, erro: '' });
+  const startedAuto = useRef(false);
+  useEffect(() => {
+    if (startedAuto.current || p.readOnly) return;
+    startedAuto.current = true;
+    const grupos = [...new Set(items.filter((c) => c.content.fundo === 'pendente' && !c.bg && c.content.grupo).map((c) => c.content.grupo as string))];
+    if (!grupos.length) return;
+    setFundos({ total: grupos.length, feitos: 0, erro: '' });
+    const fila = [...grupos];
+    let parar = false;
+    const worker = async () => {
+      while (fila.length && !parar) {
+        const grupo = fila.shift()!;
+        try {
+          const r = await fetch('/api/ai/image', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ grupo }) });
+          const j = await aiJson(r);
+          if (!r.ok) {
+            if (r.status === 429) { parar = true; fila.length = 0; } // limite do plano: não adianta seguir
+            setFundos((f) => ({ ...f, erro: j.error || 'Não foi possível criar um dos fundos.' }));
+            setItems((l) => l.map((c) => (c.content.grupo === grupo ? { ...c, content: { ...c.content, fundo: 'sem' } } : c)));
+          } else {
+            setItems((l) => l.map((c) => (c.content.grupo === grupo ? { ...c, bg: j.url, content: { ...c.content, fundo: 'ok' } } : c)));
+          }
+        } catch {
+          setFundos((f) => ({ ...f, erro: 'Não foi possível criar um dos fundos.' }));
+        } finally {
+          setFundos((f) => ({ ...f, feitos: f.feitos + 1 }));
+        }
+      }
+    };
+    Promise.all([worker(), worker(), worker()]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const gerandoFundos = fundos.total > 0 && fundos.feitos < fundos.total;
+
   const img = (u: string | null | undefined) => (u ? data[u] || u : null);
   const renderProps = (c: SCreative) => {
     const ph = c.content.fotoIndex >= 0 ? p.photos[c.content.fotoIndex] : undefined;
@@ -93,15 +129,15 @@ export function Studio(p: Props) {
 
   async function aiBackground() {
     if (!cur) return;
-    const d = window.prompt('Descreva o fundo (sem pessoas). Ex.: consultório odontológico moderno, claro, com plantas');
+    const d = window.prompt('Descreva o fundo (sem pessoas). Ex.: consultório odontológico moderno, claro, com plantas', cur.content.cena || '');
     if (!d) return;
     setBusy('A IA está criando o fundo...');
     try {
       const r = await fetch('/api/ai/image', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ creativeId: cur.id, descricao: d }) });
       const j = await aiJson(r);
       if (!r.ok) throw new Error(j.error);
-      patch((c) => ({ ...c, bg: j.url, template: 'tipografico' }));
-      setMsg('Fundo criado. Ele aparece no modelo "Só texto".');
+      patch((c) => ({ ...c, bg: j.url, content: { ...c.content, fundo: 'ok' } }));
+      setMsg('Fundo criado.');
     } catch (e) { setMsg('Erro: ' + (e as Error).message); } finally { setBusy(''); }
   }
 
@@ -127,10 +163,11 @@ export function Studio(p: Props) {
           <div className="flex flex-wrap justify-center gap-2">
             {!p.readOnly && <button type="button" onClick={save} disabled={!!busy} className="btn btn-sec">Salvar</button>}
             <button type="button" onClick={exportPng} disabled={!!busy} className="btn btn-lima">Baixar PNG</button>
-            {!p.readOnly && <button type="button" onClick={aiBackground} disabled={!!busy} className="btn btn-sec">Fundo com IA</button>}
+            {!p.readOnly && <button type="button" onClick={aiBackground} disabled={!!busy || gerandoFundos} className="btn btn-sec">{cur.bg ? 'Trocar fundo' : 'Fundo com IA'}</button>}
             {!p.readOnly && <button type="button" onClick={() => start(async () => { await archiveCreative(cur.id); setItems((l) => l.filter((x) => x.id !== cur.id)); setSel(items.find((x) => x.id !== cur.id)?.id || ''); })} className="btn btn-danger">Descartar</button>}
           </div>
-          <p role="status" className="text-sm text-slate-600">{busy || msg}</p>
+          <p role="status" className="text-sm text-slate-600">{busy || (gerandoFundos ? `Criando os fundos com IA: ${fundos.feitos} de ${fundos.total} (cerca de 30 s cada)...` : msg)}</p>
+          {fundos.erro && !gerandoFundos && <p role="alert" className="max-w-md text-center text-sm text-amber-800">{fundos.erro} As artes sem fundo ficam com a cor da marca; use “Fundo com IA” para tentar de novo.</p>}
           {/* Renderização em tamanho real, fora da tela, usada na exportação */}
           <div aria-hidden="true" style={{ position: 'fixed', left: -20000, top: 0 }}>
             <div ref={exportRef}><CreativeRender {...renderProps(cur)} /></div>

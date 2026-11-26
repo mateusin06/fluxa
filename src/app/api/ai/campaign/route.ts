@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { apiContext, jsonError } from '@/lib/api-ctx';
-import { generateJson, complianceRules, QuotaError } from '@/lib/gemini';
+import { generateJsonOr, complianceRules, QuotaError } from '@/lib/gemini';
+import { campaignOffline } from '@/lib/ai-fallback';
 import { clinicBrief, OBJECTIVES } from '@/lib/marketing';
 
-export const maxDuration = 90;
+export const maxDuration = 120;
 
 const SCHEMA = {
   type: 'OBJECT',
@@ -48,10 +49,11 @@ Nunca invente resultados garantidos; use estimativas como faixas e diga que são
 Regras dos textos:\n${complianceRules(clinic.kind, { name: clinic.responsible_name, reg: clinic.responsible_reg })}`;
   const prompt = `${clinicBrief(clinic)}\n\nCampanha: ${b.data.nome}\nObjetivo: ${OBJECTIVES[b.data.objetivo]}\nOrçamento diário: R$ ${b.data.orcamento}\nRegião: ${b.data.raio || 'cidade da clínica e raio de 10 km'}\nDetalhes: ${b.data.detalhes || '—'}\nPrefira campanhas de mensagens para o WhatsApp quando o objetivo for agendar.`;
   try {
-    const plan = await generateJson<Record<string, unknown>>({ clinicId: clinic.id, plan: clinic.plan, userId: user.id, feature: 'campanha' }, system, prompt, SCHEMA, 0.6);
+    const { data: plan, offline } = await generateJsonOr<Record<string, unknown>>({ clinicId: clinic.id, plan: clinic.plan, userId: user.id, feature: 'campanha' }, system, prompt, SCHEMA,
+      () => campaignOffline({ nome: b.data.nome, objetivo: b.data.objetivo, orcamento: b.data.orcamento, raio: b.data.raio, clinic }), 0.6);
     const { data, error } = await supabase.from('campaigns').insert({ clinic_id: clinic.id, name: b.data.nome, objective: b.data.objetivo, daily_budget: b.data.orcamento, plan, created_by: user.id }).select('id').single();
     if (error) throw new Error(error.message);
-    return NextResponse.json({ id: data.id });
+    return NextResponse.json({ id: data.id, offline });
   } catch (e) {
     return jsonError(e, e instanceof QuotaError ? 429 : 500);
   }

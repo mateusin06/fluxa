@@ -42,6 +42,12 @@ export interface Appointment {
 export interface CreativeContent {
   headline: string; destaque: string; subtitulo: string; bullets: string[]; cta: string; selo: string;
   rodape: string; fotoIndex: number; paleta: 'marca' | 'escuro' | 'claro';
+  /** Cenário do fundo fotográfico gerado por IA (sem pessoas, sem texto). */
+  cena?: string;
+  /** Mesma variação em formatos diferentes (feed, story...) compartilha o mesmo fundo. */
+  grupo?: string;
+  /** pendente: o estúdio gera o fundo sozinho ao abrir · ok: já tem · sem: não gerar automaticamente */
+  fundo?: 'pendente' | 'ok' | 'sem';
 }
 export interface AdCopy { texto_principal: string; titulo: string; descricao: string; cta: string }
 export interface Creative {

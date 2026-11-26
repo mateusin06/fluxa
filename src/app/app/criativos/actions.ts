@@ -30,6 +30,7 @@ const content = z.object({
   headline: z.string().max(120), destaque: z.string().max(60), subtitulo: z.string().max(220), bullets: z.array(z.string().max(70)).max(4),
   cta: z.string().max(40), selo: z.string().max(30), rodape: z.string().max(200).optional().default(''), fotoIndex: z.number().int().min(-1).max(20),
   paleta: z.enum(['marca', 'escuro', 'claro']),
+  cena: z.string().max(400).optional(), grupo: z.string().uuid().optional(), fundo: z.enum(['pendente', 'ok', 'sem']).optional(),
 });
 
 export async function saveCreative(input: unknown): Promise<{ ok?: boolean; error?: string }> {

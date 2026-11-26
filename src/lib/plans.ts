@@ -7,10 +7,19 @@ export const PRICING = {
   carenciaDias: 7,               // dias de atraso antes de bloquear a escrita
 } as const;
 
+/**
+ * Limites mensais de IA (renovam no dia 1º, horário UTC).
+ * textosIA / imagensIA: quantidade de gerações (1 imagem = 1 fundo de variação, cerca de US$ 0,04 no gpt-image-2.6).
+ * tokensTextoIA: teto de tokens de SAÍDA de texto no mês (inclui o raciocínio do modelo). Trava o custo:
+ * 1,5 mi × US$ 4,50/1M (gpt-5.4-mini) ≈ US$ 6,75 ≈ R$ 37 por clínica no pior caso.
+ */
 export const LIMITS = {
-  sistema: { textosIA: 300, imagensIA: 20, usuarios: 5 },
-  sistema_automacoes: { textosIA: 600, imagensIA: 40, usuarios: 10 },
+  sistema: { textosIA: 300, imagensIA: 60, tokensTextoIA: 1_500_000, usuarios: 5 },
+  sistema_automacoes: { textosIA: 600, imagensIA: 120, tokensTextoIA: 3_000_000, usuarios: 10 },
 } as const;
+
+/** Teto de tokens de saída em UMA chamada de texto (a maior resposta, o plano de campanha, usa cerca de 3,5 mil). */
+export const MAX_TOKENS_POR_CHAMADA = 6_000;
 
 export type Plan = keyof typeof LIMITS;
 

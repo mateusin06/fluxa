@@ -23,7 +23,10 @@ export const HEADERS: Record<string, string[]> = {
   Financeiro: ['id', 'nome', 'telefone', 'valor', 'vencimento', 'status', 'etapa_cobranca', 'link_pagamento', 'ultima_cobranca_em', 'alerta_gestor_em', '_row'],
   Log: ['timestamp', 'fluxo', 'nome', 'telefone', 'template', 'status_http', 'wa_id_ou_erro', '_row'],
   Respostas: ['timestamp', 'telefone', 'tipo', 'payload', 'texto', 'wa_id', '_row'],
+  /** Só leitura: convênios que a clínica atende (Clínica e equipe → Convênios). Vazia = atende só particular. */
+  Convenios: ['convenio', '_row'],
 };
+const SO_LEITURA = 'A aba Convenios é só leitura: os convênios são editados no sistema, em Clínica e equipe → Convênios.';
 export const TABS = Object.keys(HEADERS);
 
 const APPT_STATUS = new Set(['livre', 'agendado', 'confirmado', 'remarcar', 'cancelado', 'realizado', 'faltou']);
@@ -150,6 +153,11 @@ export async function readTab(db: Db, cid: string, tab: string): Promise<string[
     const list = await all<Obj>((a, b) => db.from('charges').select('id, amount, due_date, status, payment_link, meta, sheet_row, contact:contacts(name, phone)')
       .eq('clinic_id', cid).neq('status', 'cancelado').eq('payer', 'paciente').order('sheet_row').range(a, b));
     return [H, ...list.map((r) => { const c = (r.contact as Obj) || {}; return row({ ...meta(r), id: r.id, nome: c.name, telefone: c.phone, valor: Number(r.amount).toFixed(2), vencimento: r.due_date, status: r.status, link_pagamento: r.payment_link, _row: r.sheet_row }); })];
+  }
+
+  if (tab === 'Convenios') {
+    const ic = await insClinic(db, cid);
+    return [H, ...(ic.accepts_insurance ? ic.insurances || [] : []).map((n, i) => row({ convenio: n, _row: i + 2 }))];
   }
 
   // Log e Respostas
@@ -327,6 +335,7 @@ export async function batchUpdate(db: Db, cid: string, data: { range: string; va
     if (!m) throw new Error('Intervalo inválido: ' + d.range);
     const tab = m[1], H = HEADERS[tab];
     if (!H) throw new Error(`A aba "${tab}" não existe no modo sistema`);
+    if (tab === 'Convenios') throw new Error(SO_LEITURA);
     const col = H[colIndex(m[2])];
     if (!col) throw new Error(`Coluna fora da aba ${tab}: ${m[2]}`);
     const key = `${tab}|${m[3]}`;
@@ -352,6 +361,7 @@ export async function batchUpdate(db: Db, cid: string, data: { range: string; va
 export async function append(db: Db, cid: string, tab: string, rows: unknown[][]) {
   const H = HEADERS[tab];
   if (!H) throw new Error(`A aba "${tab}" não existe no modo sistema`);
+  if (tab === 'Convenios') throw new Error(SO_LEITURA);
   for (const values of rows || []) {
     const o: Record<string, string> = {};
     H.forEach((h, i) => { o[h] = S(values?.[i]).trim(); });

@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { apiContext, jsonError } from '@/lib/api-ctx';
-import { generateJson, complianceRules, QuotaError } from '@/lib/gemini';
+import { generateJsonOr, complianceRules, QuotaError } from '@/lib/gemini';
+import { copiesOffline } from '@/lib/ai-fallback';
 import { clinicBrief, VOSS } from '@/lib/marketing';
 
-export const maxDuration = 90;
+export const maxDuration = 120;
 
 const KINDS = {
   anuncio: 'Textos de anúncio para Meta Ads (texto principal, título e descrição)',
@@ -48,11 +49,11 @@ export async function POST(req: Request) {
   const system = `Você é copywriter sênior de marketing para clínicas no Brasil.\n${b.data.kind === 'whatsapp' ? VOSS + '\n' : ''}Regras obrigatórias:\n${complianceRules(clinic.kind, { name: clinic.responsible_name, reg: clinic.responsible_reg })}`;
   const prompt = `${clinicBrief(clinic)}\n\nTipo: ${KINDS[b.data.kind]}\nTema: ${b.data.topic}\nTom: ${b.data.tone || 'acolhedor e confiante'}\nGere ${b.data.qtd} variações com ângulos diferentes.`;
   try {
-    const out = await generateJson<{ itens: { titulo: string; texto: string; extra: string }[]; alertas: string[] }>(
-      { clinicId: clinic.id, plan: clinic.plan, userId: user.id, feature: 'textos' }, system, prompt, SCHEMA);
+    const { data: out, offline } = await generateJsonOr<{ itens: { titulo: string; texto: string; extra: string }[]; alertas: string[] }>(
+      { clinicId: clinic.id, plan: clinic.plan, userId: user.id, feature: 'textos' }, system, prompt, SCHEMA, () => copiesOffline(b.data.kind, b.data.topic, b.data.qtd, clinic));
     const { data, error } = await supabase.from('copies').insert({ clinic_id: clinic.id, kind: b.data.kind, topic: b.data.topic, content: out, created_by: user.id }).select('id').single();
     if (error) throw new Error(error.message);
-    return NextResponse.json({ id: data.id, ...out });
+    return NextResponse.json({ id: data.id, ...out, offline });
   } catch (e) {
     return jsonError(e, e instanceof QuotaError ? 429 : 500);
   }

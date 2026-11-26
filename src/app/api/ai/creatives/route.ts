@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { apiContext, jsonError } from '@/lib/api-ctx';
-import { generateJson, complianceRules, QuotaError } from '@/lib/gemini';
+import { generateJsonOr, complianceRules, QuotaError } from '@/lib/gemini';
+import { creativesOffline } from '@/lib/ai-fallback';
 import { clinicBrief, OBJECTIVES, type Objective } from '@/lib/marketing';
 
 export const maxDuration = 120;
@@ -28,8 +29,9 @@ const SCHEMA = {
           descricao: { type: 'STRING', description: 'Descrição do anúncio, até 30 caracteres' },
           cta_meta: { type: 'STRING', enum: ['Enviar mensagem', 'Saiba mais', 'Agendar agora', 'Ligar agora'] },
           compliance: { type: 'ARRAY', items: { type: 'STRING' }, description: 'Alertas de conformidade para a clínica revisar (pode ser vazio)' },
+          cena: { type: 'STRING', description: 'Cenário da fotografia de fundo desta arte, em português, 15 a 40 palavras: ambiente, objetos, materiais, luz e cores. Sem pessoas, sem partes do corpo, sem texto, sem logotipos. Diferente em cada variação.' },
         },
-        required: ['template', 'paleta', 'headline', 'destaque', 'subtitulo', 'bullets', 'cta', 'selo', 'fotoIndex', 'texto_principal', 'titulo', 'descricao', 'cta_meta', 'compliance'],
+        required: ['template', 'paleta', 'headline', 'destaque', 'subtitulo', 'bullets', 'cta', 'selo', 'fotoIndex', 'texto_principal', 'titulo', 'descricao', 'cta_meta', 'compliance', 'cena'],
       },
     },
   },
@@ -39,6 +41,7 @@ const SCHEMA = {
 interface Var {
   template: string; paleta: 'marca' | 'escuro' | 'claro'; headline: string; destaque: string; subtitulo: string; bullets: string[];
   cta: string; selo: string; fotoIndex: number; texto_principal: string; titulo: string; descricao: string; cta_meta: string; compliance: string[];
+  cena?: string;
 }
 
 export async function POST(req: Request) {
@@ -66,6 +69,9 @@ export async function POST(req: Request) {
 Crie variações realmente diferentes entre si (ângulos diferentes: dor, desejo, autoridade, prova de cuidado, curiosidade).
 O headline é o gancho que para a rolagem: concreto, curto, sem clichê.
 O texto principal termina com convite claro para chamar no WhatsApp.
+Toda arte recebe uma fotografia de fundo gerada por IA a partir do campo "cena": descreva um cenário publicitário sofisticado e moderno,
+coerente com o procedimento e com a identidade da clínica (ex.: bancada de mármore claro com produtos de skincare e luz natural lateral;
+consultório odontológico minimalista com cadeira branca, plantas e luz suave). Nunca pessoas, rostos, mãos, dentes ou pele em close, texto ou logotipos.
 Regras obrigatórias:
 ${complianceRules(clinic.kind, { name: clinic.responsible_name, reg: clinic.responsible_reg })}`;
 
@@ -80,27 +86,32 @@ Tom de voz: ${brief.tone || 'acolhedor e confiante'}
 Mensagem/condição que a clínica quer passar: ${brief.offer || '—'}
 Direcionamento da clínica para as artes: ${brief.instructions || '—'}
 Profissionais: ${ordered.map((p) => `${p.name}${p.specialty ? ' (' + p.specialty + ')' : ''}${p.registration ? ' ' + p.registration : ''}${p.bio ? ' — ' + p.bio : ''}`).join('; ') || 'não informados'}
-Fotos disponíveis (use o índice em fotoIndex): ${photos.length ? photos.map((f, i) => `${i}=${f}`).join(', ') : 'nenhuma (use template tipografico ou lista, fotoIndex -1)'}
+Fotos disponíveis (use o índice em fotoIndex): ${photos.length ? photos.map((f, i) => `${i}=${f}`).join(', ') : 'nenhuma (fotoIndex -1; o fundo de IA ocupa o lugar da foto: prefira os templates tipografico, destaque, lista e lateral)'}
 
 Gere exatamente ${body.data.variacoes} variações. Se houver foto de profissional, pelo menos uma variação usa o template autoridade.`;
 
   try {
-    const out = await generateJson<{ variacoes: Var[] }>({ clinicId: clinic.id, plan: clinic.plan, userId: user.id, feature: 'criativos' }, system, prompt, SCHEMA);
+    const { data: out, offline } = await generateJsonOr<{ variacoes: Var[] }>({ clinicId: clinic.id, plan: clinic.plan, userId: user.id, feature: 'criativos' }, system, prompt, SCHEMA,
+      () => creativesOffline({ n: body.data.variacoes, clinic, procedimento: proc?.name, titulo: brief.title, oferta: brief.offer, profissional: ordered[0] || null, temFotoProf: !!ordered.find((p) => p.photo_path), fotos: photos.length }));
     const vars = (out.variacoes || []).slice(0, body.data.variacoes);
-    const rows = vars.flatMap((v) => (brief.formats as string[]).map((format) => ({
+    const cenaPadrao = clinic.kind === 'odonto'
+      ? 'consultório odontológico minimalista e moderno, cadeira branca, detalhes em madeira clara, plantas, luz natural suave pela janela'
+      : 'bancada de mármore claro com frascos de skincare sem rótulo, folhas verdes, luz natural lateral suave, ambiente de spa sofisticado';
+    const rows = vars.flatMap((v) => { const grupo = crypto.randomUUID(); return (brief.formats as string[]).map((format) => ({
       clinic_id: clinic.id, brief_id: brief.id, format,
       template: ['destaque', 'lateral', 'lista', 'autoridade', 'tipografico'].includes(v.template) ? v.template : 'destaque',
       content: {
         headline: v.headline.slice(0, 90), destaque: v.destaque.slice(0, 40), subtitulo: v.subtitulo.slice(0, 160),
         bullets: (v.bullets || []).slice(0, 4).map((b) => b.slice(0, 50)), cta: v.cta.slice(0, 32), selo: (v.selo || '').slice(0, 26),
         fotoIndex: photos.length ? Math.min(Math.max(v.fotoIndex ?? 0, 0), photos.length - 1) : -1, paleta: v.paleta || 'marca',
+        cena: (v.cena || cenaPadrao).slice(0, 400), grupo, fundo: 'pendente' as const,
       },
       ad_copy: { texto_principal: v.texto_principal, titulo: v.titulo.slice(0, 60), descricao: v.descricao.slice(0, 40), cta: v.cta_meta },
       compliance: v.compliance || [],
-    })));
+    })); });
     const { error } = await supabase.from('creatives').insert(rows);
     if (error) throw new Error(error.message);
-    return NextResponse.json({ ok: true, total: rows.length });
+    return NextResponse.json({ ok: true, total: rows.length, offline });
   } catch (e) {
     return jsonError(e, e instanceof QuotaError ? 429 : 500);
   }
